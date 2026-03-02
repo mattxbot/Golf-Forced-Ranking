@@ -236,6 +236,15 @@ a comparison (user changes their mind) is an UPDATE, not a conflicting INSERT.
 ### Tables
 
 ```sql
+-- ============================================================
+-- Extensions
+-- ============================================================
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
+-- ============================================================
+-- Core tables
+-- ============================================================
+
 -- Extends Supabase auth.users
 CREATE TABLE profiles (
   id           UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
@@ -296,33 +305,74 @@ CREATE TABLE user_courses (
   UNIQUE(user_id, course_id)
 );
 
--- Pairwise comparisons (source of truth for rankings)
--- Canonical form: course_a_id < course_b_id (lexicographic UUID order)
+-- ============================================================
+-- Comparison system (RecSys Review Fix #1: temporal history)
+-- ============================================================
+
+-- Active comparisons: one per user per canonical pair.
+-- This is the ranking engine's input.
+-- Canonical form: course_a_id < course_b_id (lexicographic UUID order).
 CREATE TABLE comparisons (
   id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id       UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
   course_a_id   UUID NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
   course_b_id   UUID NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
   winner        TEXT NOT NULL CHECK (winner IN ('a', 'b')),
-  -- Timing: detect low-quality speed-tapping (<500ms = suspicious)
   decided_in_ms INTEGER,
   created_at    TIMESTAMPTZ DEFAULT now(),
   updated_at    TIMESTAMPTZ DEFAULT now(),
-  -- One comparison per user per course pair, enforced at DB level
   UNIQUE(user_id, course_a_id, course_b_id),
-  -- Canonical ordering: course_a < course_b
   CHECK (course_a_id < course_b_id)
 );
 
--- Cached ranking output (write-behind from client-side BT computation)
--- This is a CACHE, not source of truth. Can be fully regenerated from comparisons.
+-- Append-only comparison history: every comparison ever made.
+-- Retained for: preference drift detection, recency weighting, flip-flop
+-- confidence, and temporal BT model training in Phase 2+.
+-- When a user changes A vs B, the new result goes into both tables:
+-- `comparisons` is upserted (ranking input), `comparison_history` is appended.
+CREATE TABLE comparison_history (
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id       UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  course_a_id   UUID NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
+  course_b_id   UUID NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
+  winner        TEXT NOT NULL CHECK (winner IN ('a', 'b')),
+  decided_in_ms INTEGER,
+  created_at    TIMESTAMPTZ DEFAULT now(),
+  CHECK (course_a_id < course_b_id)
+);
+
+-- ============================================================
+-- Implicit signal capture (RecSys Review Fix #2: event log)
+-- ============================================================
+
+-- Append-only event log for implicit signals.
+-- Write-only from client (insert RLS only). Never read in MVP.
+-- Phase 2 ML pipeline reads for feature engineering.
+CREATE TABLE user_events (
+  id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id    UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  event_type TEXT NOT NULL,
+  -- Event types: 'search_query', 'course_view', 'course_add',
+  --   'course_remove', 'comparison_presented', 'comparison_skipped',
+  --   'comparison_completed', 'session_start', 'session_end'
+  payload    JSONB DEFAULT '{}',
+  -- e.g. {query: "links scotland"}, {course_id: "...", duration_ms: 3400},
+  --      {course_a_id: "...", course_b_id: "...", skipped: true}
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- ============================================================
+-- Ranking cache
+-- ============================================================
+
+-- Cached ranking output (write-behind from client-side BT computation).
+-- This is a CACHE, not source of truth. Fully regenerable from comparisons.
 CREATE TABLE user_ranking_cache (
   id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id      UUID UNIQUE NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
   -- JSONB array: [{course_id, bt_score, rank, comparison_count, confidence}, ...]
   rankings     JSONB NOT NULL DEFAULT '[]',
-  -- Dirty flag: set to TRUE by DB trigger when comparisons change.
-  -- Client checks this on load to know if it needs to recompute.
+  -- Dirty flag: set TRUE by DB trigger when comparisons change.
   is_stale     BOOLEAN DEFAULT TRUE,
   computed_at  TIMESTAMPTZ DEFAULT now(),
   updated_at   TIMESTAMPTZ DEFAULT now()
@@ -335,16 +385,32 @@ CREATE TABLE user_ranking_cache (
 CREATE INDEX idx_user_courses_user ON user_courses(user_id);
 CREATE INDEX idx_comparisons_user ON comparisons(user_id);
 CREATE INDEX idx_comparisons_courses ON comparisons(course_a_id, course_b_id);
+CREATE INDEX idx_comparison_history_user ON comparison_history(user_id);
+CREATE INDEX idx_comparison_history_time ON comparison_history(user_id, created_at);
+CREATE INDEX idx_user_events_user ON user_events(user_id);
+CREATE INDEX idx_user_events_type ON user_events(event_type);
 CREATE INDEX idx_courses_slug ON courses(slug);
--- Trigram index for fuzzy course name search
-CREATE EXTENSION IF NOT EXISTS pg_trgm;
 CREATE INDEX idx_courses_name_trgm ON courses USING gin(name gin_trgm_ops);
 
 -- ============================================================
 -- Triggers
 -- ============================================================
 
--- Mark ranking cache as stale when comparisons change
+-- 1. Auto-append to comparison_history on every comparison insert/update
+CREATE OR REPLACE FUNCTION append_comparison_history()
+RETURNS TRIGGER AS $$
+BEGIN
+  INSERT INTO comparison_history (user_id, course_a_id, course_b_id, winner, decided_in_ms)
+  VALUES (NEW.user_id, NEW.course_a_id, NEW.course_b_id, NEW.winner, NEW.decided_in_ms);
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_comparison_append_history
+AFTER INSERT OR UPDATE ON comparisons
+FOR EACH ROW EXECUTE FUNCTION append_comparison_history();
+
+-- 2. Mark ranking cache as stale when comparisons change
 CREATE OR REPLACE FUNCTION mark_rankings_stale()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -361,15 +427,19 @@ AFTER INSERT OR UPDATE OR DELETE ON comparisons
 FOR EACH ROW EXECUTE FUNCTION mark_rankings_stale();
 ```
 
-### Schema Change Summary from v1
+### Schema Change Summary (v1 → v2 → v3)
 
-| Change | Why |
-|--------|-----|
-| Comparison uniqueness: canonical pair + winner column | **Data integrity bug fix.** v1 allowed contradictory records (A>B and B>A simultaneously) |
-| `decided_in_ms` on comparisons | **Data quality signal.** Sub-500ms decisions are likely speed-tapping, not genuine preferences. Needed for weighting in Phase 2+ |
-| `user_ranking_cache` replaces `user_rankings` | **Architectural alignment.** Rankings are computed client-side, persisted as a single JSONB document for recovery/sync. Separate rows per course was over-normalized for a cache |
-| Slug includes city context | **Dedup correctness.** "The Links" exists in dozens of cities. `the-links` as slug guarantees collisions |
-| DB trigger for stale flag | **Consistency guarantee.** Client always knows whether its cached ranking is current |
+| Change | Version | Why |
+|--------|---------|-----|
+| Comparison uniqueness: canonical pair + winner column | v2 | **Data integrity bug fix.** v1 allowed contradictory records |
+| `decided_in_ms` on comparisons | v2 | **Data quality signal.** Speed-tap detection, Phase 2 BT weighting |
+| `user_ranking_cache` replaces `user_rankings` | v2 | **Architectural alignment.** Client-side compute, server is cache |
+| Slug includes city context | v2 | **Dedup correctness.** Same-name courses in different cities |
+| DB trigger for stale flag | v2 | **Consistency guarantee.** Client knows when to recompute |
+| `comparison_history` append-only table | v3 | **RecSys Fix #1.** Preserves temporal signal for preference drift, recency weighting, flip-flop detection |
+| `user_events` append-only log | v3 | **RecSys Fix #2.** Captures implicit signals (search, views, skips) for Phase 2 ML |
+| Auto-append trigger on comparisons | v3 | **Consistency.** Every comparison write automatically logs to history |
+| Cross-rank pair injection in selection algo | v3 | **RecSys Fix #5.** Prevents locally-dense/globally-sparse comparison graphs |
 
 ### Row-Level Security Policy Summary
 
@@ -379,6 +449,8 @@ FOR EACH ROW EXECUTE FUNCTION mark_rankings_stale();
 | courses | All (public read) | Authenticated | Own created + unverified | None |
 | user_courses | Own rows | Own rows | Own rows | Own rows |
 | comparisons | Own rows | Own rows | Own rows | Own rows |
+| comparison_history | None (ML only) | Via trigger only | None | None |
+| user_events | None (ML only) | Own rows (write-only) | None | None |
 | user_ranking_cache | Own row | Own row (upsert) | Own row | None |
 
 ### Course Deduplication Strategy
@@ -466,7 +538,7 @@ unrealistic. The pair selection algorithm determines:
 ### Strategy: Adaptive Swiss-Tournament with Uncertainty Targeting
 
 ```
-FUNCTION select_next_pair(courses, comparisons, rankings):
+FUNCTION select_next_pair(courses, comparisons, rankings, session_index):
 
   # Phase A: Bootstrap (no ranking exists yet)
   IF comparison_count < course_count:
@@ -476,7 +548,16 @@ FUNCTION select_next_pair(courses, comparisons, rankings):
     IF uncompared is not empty:
       RETURN (random from uncompared, random from rest)
 
-  # Phase B: Boundary refinement
+  # Phase B: Cross-rank exploration (every 5th comparison in session)
+  # [RecSys Review Fix #5] Binary search insertion creates locally-dense,
+  # globally-sparse comparison graphs. Cross-rank comparisons validate
+  # transitivity and provide high-information signal for covariate learning.
+  IF session_index % 5 == 4 AND course_count >= 8:
+    top_quarter = courses ranked in top 25%
+    bottom_quarter = courses ranked in bottom 25%
+    RETURN (random from top_quarter, random from bottom_quarter)
+
+  # Phase C: Boundary refinement
   # Find adjacent pairs in current ranking that haven't been compared.
   # These comparisons have the highest information value: they resolve
   # whether the ranking order is correct at each boundary.
@@ -486,7 +567,7 @@ FUNCTION select_next_pair(courses, comparisons, rankings):
     IF pair not in comparisons:
       RETURN pair
 
-  # Phase C: Confidence fill
+  # Phase D: Confidence fill
   # Pick the pair with lowest combined confidence.
   # Breaks ties randomly to avoid predictable patterns.
   lowest_confidence_pair = pair not yet compared with
@@ -494,7 +575,7 @@ FUNCTION select_next_pair(courses, comparisons, rankings):
   IF lowest_confidence_pair exists:
     RETURN lowest_confidence_pair
 
-  # Phase D: Re-evaluation
+  # Phase E: Re-evaluation
   # All pairs compared. Pick oldest comparison for re-evaluation.
   RETURN pair with oldest comparison timestamp
 ```

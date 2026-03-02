@@ -1,0 +1,49 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 142 20% 12%;
+    --card: 0 0% 100%;
+    --card-foreground: 142 20% 12%;
+    --primary: 142 44% 28%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 142 15% 94%;
+    --secondary-foreground: 142 20% 12%;
+    --muted: 142 10% 96%;
+    --muted-foreground: 142 10% 45%;
+    --accent: 142 15% 94%;
+    --accent-foreground: 142 20% 12%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 142 10% 90%;
+    --input: 142 10% 90%;
+    --ring: 142 44% 28%;
+    --radius: 0.75rem;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+}
+
+/* Mobile-first: prevent overscroll bounce on iOS */
+html {
+  overscroll-behavior: none;
+}
+
+/* Safe area padding for PWA */
+@supports (padding: env(safe-area-inset-bottom)) {
+  .safe-bottom {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+}
