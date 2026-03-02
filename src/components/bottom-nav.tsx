@@ -2,11 +2,12 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Trophy, LayoutGrid, User } from "lucide-react";
+import { Trophy, ArrowLeftRight, LayoutGrid, User } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const tabs = [
   { href: "/rankings", label: "Rankings", icon: Trophy },
+  { href: "/compare", label: "Compare", icon: ArrowLeftRight },
   { href: "/courses", label: "Courses", icon: LayoutGrid },
   { href: "/profile", label: "Profile", icon: User },
 ] as const;

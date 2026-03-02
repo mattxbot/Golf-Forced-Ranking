@@ -4,14 +4,21 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
+import { useTheme } from "@/components/theme-provider";
+import { computeRankings, overallConfidence } from "@/lib/ranking/bradley-terry";
+import type { Course, Comparison } from "@/types/database";
+import { Sun, Moon, Monitor } from "lucide-react";
 
 export default function ProfilePage() {
   const [username, setUsername] = useState("");
   const [courseCount, setCourseCount] = useState(0);
   const [comparisonCount, setComparisonCount] = useState(0);
+  const [confidence, setConfidence] = useState(0);
+  const [topCourse, setTopCourse] = useState<Course | null>(null);
   const [loading, setLoading] = useState(true);
   const router = useRouter();
   const supabase = createClient();
+  const { theme, setTheme } = useTheme();
 
   useEffect(() => {
     async function load() {
@@ -23,16 +30,35 @@ export default function ProfilePage() {
         .select("username").eq("id", user.id).single() as { data: { username: string } | null };
       const coursesRes = await supabase
         .from("user_courses")
-        .select("id", { count: "exact", head: true })
-        .eq("user_id", user.id);
+        .select("course_id, courses(*)")
+        .eq("user_id", user.id) as unknown as {
+          data: { course_id: string; courses: Course }[] | null;
+        };
       const compsRes = await supabase
         .from("comparisons")
-        .select("id", { count: "exact", head: true })
-        .eq("user_id", user.id);
+        .select("*")
+        .eq("user_id", user.id) as unknown as { data: Comparison[] | null };
+
+      const userCourses = coursesRes.data ?? [];
+      const comparisons = compsRes.data ?? [];
 
       setUsername(profileRes.data?.username ?? user.email ?? "");
-      setCourseCount(coursesRes.count ?? 0);
-      setComparisonCount(compsRes.count ?? 0);
+      setCourseCount(userCourses.length);
+      setComparisonCount(comparisons.length);
+
+      // Compute rankings for confidence + top course
+      if (userCourses.length >= 2 && comparisons.length > 0) {
+        const courseIds = userCourses.map((uc) => uc.course_id);
+        const rankings = computeRankings(courseIds, comparisons);
+        setConfidence(overallConfidence(rankings));
+
+        if (rankings.length > 0) {
+          const topId = rankings[0].course_id;
+          const topUc = userCourses.find((uc) => uc.course_id === topId);
+          if (topUc) setTopCourse(topUc.courses);
+        }
+      }
+
       setLoading(false);
     }
     load();
@@ -47,7 +73,10 @@ export default function ProfilePage() {
   if (loading) {
     return (
       <div className="flex items-center justify-center pt-32">
-        <p className="text-sm text-muted-foreground">Loading...</p>
+        <div className="flex flex-col items-center gap-3">
+          <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+          <p className="text-sm text-muted-foreground">Loading...</p>
+        </div>
       </div>
     );
   }
@@ -56,20 +85,66 @@ export default function ProfilePage() {
     <div className="px-4 pt-6">
       <h1 className="mb-6 text-xl font-semibold">Profile</h1>
 
-      <div className="space-y-6">
-        <div className="rounded-lg border p-4">
-          <p className="text-sm text-muted-foreground">Username</p>
-          <p className="text-base font-medium">{username}</p>
+      <div className="space-y-4">
+        {/* User info */}
+        <div className="rounded-lg border bg-card p-4">
+          <p className="text-xs font-medium text-muted-foreground">Username</p>
+          <p className="text-base font-semibold">{username}</p>
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
-          <div className="rounded-lg border p-4 text-center">
+        {/* Stats grid */}
+        <div className="grid grid-cols-3 gap-3">
+          <div className="rounded-lg border bg-card p-3 text-center">
             <p className="text-2xl font-bold">{courseCount}</p>
-            <p className="text-xs text-muted-foreground">Courses played</p>
+            <p className="text-[11px] text-muted-foreground">Courses</p>
           </div>
-          <div className="rounded-lg border p-4 text-center">
+          <div className="rounded-lg border bg-card p-3 text-center">
             <p className="text-2xl font-bold">{comparisonCount}</p>
-            <p className="text-xs text-muted-foreground">Comparisons</p>
+            <p className="text-[11px] text-muted-foreground">Comparisons</p>
+          </div>
+          <div className="rounded-lg border bg-card p-3 text-center">
+            <p className="text-2xl font-bold">{confidence}%</p>
+            <p className="text-[11px] text-muted-foreground">Confidence</p>
+          </div>
+        </div>
+
+        {/* Top ranked course */}
+        {topCourse && (
+          <div className="rounded-lg border bg-card p-4">
+            <p className="mb-1 text-xs font-medium text-muted-foreground">
+              #1 Ranked Course
+            </p>
+            <p className="text-base font-semibold">{topCourse.name}</p>
+            <p className="text-xs text-muted-foreground">
+              {[topCourse.city, topCourse.state_province].filter(Boolean).join(", ")}
+            </p>
+          </div>
+        )}
+
+        {/* Theme toggle */}
+        <div className="rounded-lg border bg-card p-4">
+          <p className="mb-3 text-xs font-medium text-muted-foreground">
+            Appearance
+          </p>
+          <div className="flex gap-2">
+            {([
+              { value: "light" as const, icon: Sun, label: "Light" },
+              { value: "dark" as const, icon: Moon, label: "Dark" },
+              { value: "system" as const, icon: Monitor, label: "System" },
+            ]).map(({ value, icon: Icon, label }) => (
+              <button
+                key={value}
+                onClick={() => setTheme(value)}
+                className={`flex flex-1 flex-col items-center gap-1.5 rounded-lg border p-2.5 text-xs transition-colors ${
+                  theme === value
+                    ? "border-primary bg-primary/10 text-primary"
+                    : "border-transparent bg-secondary text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                <Icon className="h-4 w-4" />
+                {label}
+              </button>
+            ))}
           </div>
         </div>
 

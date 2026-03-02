@@ -17,6 +17,7 @@ export default function ComparePage() {
   const [sessionCount, setSessionCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [userId, setUserId] = useState<string | null>(null);
+  const [choosing, setChoosing] = useState<string | null>(null);
   const comparisonStartRef = useRef<number>(0);
   const router = useRouter();
   const supabase = createClient();
@@ -159,7 +160,9 @@ export default function ComparePage() {
   }, [loading, courses, pair, selectNextPair]);
 
   async function handleChoice(winnerId: string) {
-    if (!pair || !userId) return;
+    if (!pair || !userId || choosing) return;
+
+    setChoosing(winnerId);
 
     const loserId = winnerId === pair[0].id ? pair[1].id : pair[0].id;
     const decidedInMs = Date.now() - comparisonStartRef.current;
@@ -247,9 +250,9 @@ export default function ComparePage() {
       return;
     }
 
-    // Select next pair
-    // Need to use the updated comparisons for selection
+    // Animate out then select next pair
     setTimeout(() => {
+      setChoosing(null);
       const nextPair = selectNextPair();
       if (nextPair) {
         setPair(nextPair);
@@ -257,13 +260,16 @@ export default function ComparePage() {
       } else {
         router.push("/rankings");
       }
-    }, 300);
+    }, 400);
   }
 
   if (loading) {
     return (
       <div className="flex items-center justify-center pt-32">
-        <p className="text-sm text-muted-foreground">Loading...</p>
+        <div className="flex flex-col items-center gap-3">
+          <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+          <p className="text-sm text-muted-foreground">Loading courses...</p>
+        </div>
       </div>
     );
   }
@@ -271,6 +277,9 @@ export default function ComparePage() {
   if (courses.length < 2) {
     return (
       <div className="flex flex-col items-center justify-center px-6 pt-24 text-center">
+        <div className="mb-4 flex h-20 w-20 items-center justify-center rounded-full bg-primary/10">
+          <span className="text-4xl">&#9971;</span>
+        </div>
         <h1 className="text-xl font-semibold">Need more courses</h1>
         <p className="mt-2 text-sm text-muted-foreground">
           Add at least 2 courses to start comparing.
@@ -285,7 +294,10 @@ export default function ComparePage() {
   if (!pair) {
     return (
       <div className="flex items-center justify-center pt-32">
-        <p className="text-sm text-muted-foreground">Finding courses to compare...</p>
+        <div className="flex flex-col items-center gap-3">
+          <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+          <p className="text-sm text-muted-foreground">Finding courses to compare...</p>
+        </div>
       </div>
     );
   }
@@ -293,11 +305,11 @@ export default function ComparePage() {
   return (
     <div className="flex flex-col px-4 pt-6">
       {/* Header */}
-      <div className="mb-6 flex items-center justify-between">
+      <div className="mb-4 flex items-center justify-between">
         <div>
           <h1 className="text-lg font-semibold">Which do you prefer?</h1>
           <p className="text-xs text-muted-foreground">
-            {sessionCount} of {SESSION_SIZE}
+            {sessionCount} of {SESSION_SIZE} this session
           </p>
         </div>
         <Button
@@ -318,23 +330,60 @@ export default function ComparePage() {
       </div>
 
       {/* Course cards */}
-      <div className="space-y-3">
-        {pair.map((course) => (
-          <button
-            key={course.id}
-            onClick={() => handleChoice(course.id)}
-            className="w-full rounded-xl border-2 border-transparent bg-card p-5 text-left shadow-sm transition-all active:scale-[0.98] active:border-primary hover:border-primary/50"
-          >
-            <p className="text-base font-semibold">{course.name}</p>
-            <p className="mt-1 text-sm text-muted-foreground">
-              {[course.city, course.state_province].filter(Boolean).join(", ")}
-            </p>
-            {course.course_type && (
-              <span className="mt-2 inline-block rounded-full bg-secondary px-2.5 py-0.5 text-xs capitalize">
-                {course.course_type}
-              </span>
+      <div className="relative space-y-3">
+        {pair.map((course, idx) => (
+          <div key={course.id}>
+            <button
+              onClick={() => handleChoice(course.id)}
+              disabled={!!choosing}
+              className={`w-full rounded-xl border-2 bg-card p-5 text-left shadow-sm transition-all duration-300 ${
+                choosing === course.id
+                  ? "scale-[1.02] border-primary shadow-md"
+                  : choosing
+                    ? "scale-[0.97] border-transparent opacity-50"
+                    : "border-transparent active:scale-[0.98] active:border-primary hover:border-primary/50"
+              }`}
+            >
+              <p className="text-base font-semibold">{course.name}</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                {[course.city, course.state_province].filter(Boolean).join(", ")}
+              </p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {course.course_type && (
+                  <span className="inline-block rounded-full bg-secondary px-2.5 py-0.5 text-xs capitalize">
+                    {course.course_type}
+                  </span>
+                )}
+                {course.architect && (
+                  <span className="inline-block rounded-full bg-secondary px-2.5 py-0.5 text-xs text-muted-foreground">
+                    {course.architect}
+                  </span>
+                )}
+                {course.year_built && (
+                  <span className="inline-block rounded-full bg-secondary px-2.5 py-0.5 text-xs text-muted-foreground">
+                    Est. {course.year_built}
+                  </span>
+                )}
+              </div>
+              {(course.holes || course.par) && (
+                <p className="mt-2 text-xs text-muted-foreground">
+                  {[
+                    course.holes ? `${course.holes} holes` : null,
+                    course.par ? `Par ${course.par}` : null,
+                  ].filter(Boolean).join(" · ")}
+                </p>
+              )}
+            </button>
+            {/* VS divider between cards */}
+            {idx === 0 && (
+              <div className="relative flex items-center justify-center py-1">
+                <div className="absolute inset-x-0 top-1/2 h-px bg-border" />
+                <span className="relative z-10 flex h-8 w-8 items-center justify-center rounded-full border bg-background text-xs font-bold text-muted-foreground">
+                  VS
+                </span>
+              </div>
             )}
-          </button>
+          </div>
         ))}
       </div>
     </div>
