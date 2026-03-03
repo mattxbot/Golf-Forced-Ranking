@@ -7,8 +7,10 @@ import { Button } from "@/components/ui/button";
 import { canonicalizePair } from "@/lib/utils";
 import { computeRankings } from "@/lib/ranking/bradley-terry";
 import { trackEvent } from "@/lib/events";
+import { appendComparison, flushWal } from "@/lib/comparison-wal";
 import { LoadError } from "@/components/load-error";
-import type { Course, Comparison } from "@/types/database";
+import { overallConfidence } from "@/lib/ranking/bradley-terry";
+import type { Course, Comparison, RankingEntry } from "@/types/database";
 
 const SESSION_SIZE = 10;
 
@@ -21,6 +23,9 @@ export default function ComparePage() {
   const [error, setError] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
   const [choosing, setChoosing] = useState<string | null>(null);
+  const [sessionComplete, setSessionComplete] = useState(false);
+  const [preSessionRankings, setPreSessionRankings] = useState<RankingEntry[]>([]);
+  const [postSessionRankings, setPostSessionRankings] = useState<RankingEntry[]>([]);
   const comparisonStartRef = useRef<number>(0);
 
   // Refs to avoid stale closures in setTimeout callbacks
@@ -59,6 +64,13 @@ export default function ComparePage() {
       );
       setCourses(userCourses);
       setComparisons(compsRes.data ?? []);
+
+      // Capture pre-session rankings for summary
+      const courseIds = userCourses.map((c) => c.id);
+      const comps = compsRes.data ?? [];
+      if (courseIds.length >= 2 && comps.length > 0) {
+        setPreSessionRankings(computeRankings(courseIds, comps));
+      }
     } catch {
       setError(true);
     } finally {
@@ -66,10 +78,11 @@ export default function ComparePage() {
     }
   }, [supabase]);
 
-  // Load data on mount
+  // Load data on mount and flush any pending WAL entries
   useEffect(() => {
     loadData();
-  }, [loadData]);
+    flushWal(supabase);
+  }, [loadData, supabase]);
 
   // Select next pair using the Swiss-tournament algorithm.
   // Reads from refs so it always sees the latest state.
@@ -216,18 +229,18 @@ export default function ComparePage() {
     const newSessionCount = sessionCount + 1;
     setSessionCount(newSessionCount);
 
-    // Persist to DB (fire-and-forget)
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (supabase.from("comparisons") as any)
-      .upsert(
-        {
-          user_id: userId,
-          ...canonical,
-          decided_in_ms: decidedInMs,
-        },
-        { onConflict: "user_id,course_a_id,course_b_id" }
-      )
-      .then();
+    // Persist to DB via WAL (survives tab close / network loss)
+    appendComparison(
+      {
+        id: newComparison.id,
+        user_id: userId,
+        ...canonical,
+        decided_in_ms: decidedInMs,
+        created_at: newComparison.created_at,
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      supabase as any
+    );
 
     // Log implicit signal
     trackEvent(supabase, userId, "comparison_completed", {
@@ -263,9 +276,22 @@ export default function ComparePage() {
         .then();
     }
 
-    // Check session completion
+    // Check session completion — show summary instead of redirect
     if (newSessionCount >= SESSION_SIZE) {
-      router.push("/rankings");
+      const allComps = [
+        ...comparisons.filter(
+          (c) =>
+            !(c.course_a_id === canonical.course_a_id &&
+              c.course_b_id === canonical.course_b_id)
+        ),
+        newComparison,
+      ];
+      const postRankings = computeRankings(courses.map((c) => c.id), allComps);
+      setPostSessionRankings(postRankings);
+      setTimeout(() => {
+        setChoosing(null);
+        setSessionComplete(true);
+      }, 400);
       return;
     }
 
@@ -310,6 +336,168 @@ export default function ComparePage() {
         <Button className="mt-6" onClick={() => router.push("/courses")}>
           Add courses
         </Button>
+      </div>
+    );
+  }
+
+  // Session summary screen
+  if (sessionComplete && postSessionRankings.length > 0) {
+    const courseMap = new Map(courses.map((c) => [c.id, c]));
+    const preRankMap = new Map(preSessionRankings.map((r) => [r.course_id, r.rank]));
+    const confidence = overallConfidence(postSessionRankings);
+
+    // Compute rank changes
+    const movers = postSessionRankings
+      .map((r) => {
+        const oldRank = preRankMap.get(r.course_id);
+        const change = oldRank != null ? oldRank - r.rank : 0;
+        return { ...r, change };
+      })
+      .filter((m) => m.change !== 0)
+      .sort((a, b) => Math.abs(b.change) - Math.abs(a.change))
+      .slice(0, 5);
+
+    return (
+      <div className="flex flex-col px-4 pt-6">
+        <div className="mb-2 text-center">
+          <span className="text-4xl">&#127942;</span>
+        </div>
+        <h1 className="text-center text-xl font-semibold">Session complete</h1>
+        <p className="mt-1 text-center text-sm text-muted-foreground">
+          {SESSION_SIZE} comparisons recorded
+        </p>
+
+        {/* Confidence */}
+        <div className="mt-6 rounded-lg border bg-card p-3">
+          <div className="mb-1.5 flex items-center justify-between">
+            <span className="text-xs font-medium text-muted-foreground">
+              Ranking confidence
+            </span>
+            <span className="text-xs font-semibold">{confidence}%</span>
+          </div>
+          <div className="h-2 overflow-hidden rounded-full bg-secondary">
+            <div
+              className="h-full rounded-full bg-primary transition-all duration-500"
+              style={{ width: `${confidence}%` }}
+            />
+          </div>
+        </div>
+
+        {/* Biggest movers */}
+        {movers.length > 0 && (
+          <div className="mt-5">
+            <h2 className="mb-2 text-sm font-medium text-muted-foreground">
+              Biggest movers
+            </h2>
+            <div className="space-y-2">
+              {movers.map((m) => {
+                const course = courseMap.get(m.course_id);
+                if (!course) return null;
+                const up = m.change > 0;
+                return (
+                  <div
+                    key={m.course_id}
+                    className="flex items-center gap-3 rounded-lg border bg-card p-3"
+                  >
+                    <span
+                      className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-sm font-bold ${
+                        m.rank === 1
+                          ? "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-400"
+                          : "bg-primary/10 text-primary"
+                      }`}
+                    >
+                      {m.rank}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium">
+                        {course.name}
+                      </p>
+                    </div>
+                    <span
+                      className={`shrink-0 text-sm font-semibold ${
+                        up
+                          ? "text-green-600 dark:text-green-400"
+                          : "text-red-500 dark:text-red-400"
+                      }`}
+                    >
+                      {up ? "\u2191" : "\u2193"} {Math.abs(m.change)}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Top 3 */}
+        <div className="mt-5">
+          <h2 className="mb-2 text-sm font-medium text-muted-foreground">
+            Current top 3
+          </h2>
+          <div className="space-y-2">
+            {postSessionRankings.slice(0, 3).map((entry) => {
+              const course = courseMap.get(entry.course_id);
+              if (!course) return null;
+              return (
+                <div
+                  key={entry.course_id}
+                  className="flex items-center gap-3 rounded-lg border bg-card p-3"
+                >
+                  <span
+                    className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-sm font-bold ${
+                      entry.rank === 1
+                        ? "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-400"
+                        : entry.rank === 2
+                          ? "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300"
+                          : "bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-400"
+                    }`}
+                  >
+                    {entry.rank}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium">
+                      {course.name}
+                    </p>
+                    <p className="truncate text-xs text-muted-foreground">
+                      {[course.city, course.state_province]
+                        .filter(Boolean)
+                        .join(", ")}
+                    </p>
+                  </div>
+                  <span className="shrink-0 text-sm font-semibold tabular-nums">
+                    {entry.bt_score.toFixed(1)}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Actions */}
+        <div className="mt-6 flex gap-3 pb-4">
+          <Button
+            variant="outline"
+            className="flex-1"
+            onClick={() => {
+              setSessionCount(0);
+              setSessionComplete(false);
+              setPreSessionRankings(postSessionRankings);
+              const nextPair = selectNextPair();
+              if (nextPair) {
+                setPair(nextPair);
+                comparisonStartRef.current = Date.now();
+              }
+            }}
+          >
+            Keep going
+          </Button>
+          <Button
+            className="flex-1"
+            onClick={() => router.push("/rankings")}
+          >
+            View rankings
+          </Button>
+        </div>
       </div>
     );
   }
