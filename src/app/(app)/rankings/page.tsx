@@ -1,10 +1,11 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
+import { LoadError } from "@/components/load-error";
 import { computeRankings, overallConfidence } from "@/lib/ranking/bradley-terry";
 import type { Course, Comparison, RankingEntry } from "@/types/database";
 
@@ -20,11 +21,14 @@ export default function RankingsPage() {
   const [courseCount, setCourseCount] = useState(0);
   const [comparisonCount, setComparisonCount] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
   const router = useRouter();
   const supabase = createClient();
 
-  useEffect(() => {
-    async function load() {
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(false);
+    try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
@@ -57,11 +61,20 @@ export default function RankingsPage() {
         const computed = computeRankings(courseIds, comparisons);
         setRankings(computed);
       }
-
+    } catch {
+      setError(true);
+    } finally {
       setLoading(false);
     }
-    load();
   }, [supabase]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  if (error) {
+    return <LoadError onRetry={load} />;
+  }
 
   if (loading) {
     return (
@@ -183,11 +196,11 @@ export default function RankingsPage() {
                 <span
                   className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-sm font-bold ${
                     entry.rank === 1
-                      ? "bg-yellow-100 text-yellow-700"
+                      ? "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-400"
                       : entry.rank === 2
-                        ? "bg-gray-100 text-gray-600"
+                        ? "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300"
                         : entry.rank === 3
-                          ? "bg-orange-100 text-orange-700"
+                          ? "bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-400"
                           : "bg-primary/10 text-primary"
                   }`}
                 >

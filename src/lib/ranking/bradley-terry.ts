@@ -13,18 +13,69 @@
 
 import type { RankingEntry } from "@/types/database";
 
-interface ComparisonInput {
+export interface ComparisonInput {
   course_a_id: string;
   course_b_id: string;
   winner: "a" | "b";
 }
 
-const MAX_ITERATIONS = 20;
-const CONVERGENCE_THRESHOLD = 1e-6;
-const DEFAULT_SCORE = 0.5; // For courses with 0 comparisons
+export const ALGORITHM_VERSION = 2;
+const MAX_ITERATIONS = 50;
+const CONVERGENCE_THRESHOLD = 1e-8;
+const LAPLACE_PSEUDO_COUNT = 0.5;
+const DEFAULT_SCORE = 0.5;
+
+/**
+ * Find connected components in the comparison graph via BFS.
+ * Returns an array of components, each being a Set of course IDs.
+ */
+export function findConnectedComponents(
+  courseIds: string[],
+  comparisons: ComparisonInput[]
+): Set<string>[] {
+  const courseSet = new Set(courseIds);
+
+  // Build adjacency list (undirected)
+  const adjacency = new Map<string, Set<string>>();
+  for (const id of courseIds) {
+    adjacency.set(id, new Set());
+  }
+  for (const comp of comparisons) {
+    if (!courseSet.has(comp.course_a_id) || !courseSet.has(comp.course_b_id)) continue;
+    adjacency.get(comp.course_a_id)!.add(comp.course_b_id);
+    adjacency.get(comp.course_b_id)!.add(comp.course_a_id);
+  }
+
+  const visited = new Set<string>();
+  const components: Set<string>[] = [];
+
+  for (const id of courseIds) {
+    if (visited.has(id)) continue;
+    const component = new Set<string>();
+    const queue = [id];
+    while (queue.length > 0) {
+      const current = queue.pop()!;
+      if (visited.has(current)) continue;
+      visited.add(current);
+      component.add(current);
+      for (const neighbor of adjacency.get(current) ?? []) {
+        if (!visited.has(neighbor)) queue.push(neighbor);
+      }
+    }
+    components.push(component);
+  }
+
+  return components;
+}
 
 /**
  * Compute Bradley-Terry rankings from pairwise comparisons.
+ *
+ * Fixes over v1:
+ * - Stores edges asymmetrically (only a→b where a < b) to prevent double-counting
+ * - Detects disconnected components and ranks within each independently
+ * - Uses Laplace smoothing instead of hardcoded scores for all-losses case
+ * - Confidence based on unique opponents rather than raw comparison count
  *
  * @param courseIds - All course IDs to rank
  * @param comparisons - Pairwise comparison outcomes
@@ -47,103 +98,144 @@ export function computeRankings(
     ];
   }
 
-  // Build win counts and comparison graph
+  const courseSet = new Set(courseIds);
+
+  // Filter to relevant comparisons
+  const relevantComps = comparisons.filter(
+    (c) => courseSet.has(c.course_a_id) && courseSet.has(c.course_b_id)
+  );
+
+  // Build win counts, comparison counts, and unique opponents
   const wins = new Map<string, number>();
-  const comparisonGraph = new Map<string, Map<string, number>>();
   const compCounts = new Map<string, number>();
+  const uniqueOpponents = new Map<string, Set<string>>();
 
   for (const id of courseIds) {
     wins.set(id, 0);
-    comparisonGraph.set(id, new Map());
     compCounts.set(id, 0);
+    uniqueOpponents.set(id, new Set());
   }
 
-  for (const comp of comparisons) {
+  // Asymmetric edge map: only store (min_id, max_id) to prevent double-counting.
+  // Key: "idA:idB" where idA < idB. Value: total comparisons between them.
+  const edgeMap = new Map<string, number>();
+
+  for (const comp of relevantComps) {
     const winnerId = comp.winner === "a" ? comp.course_a_id : comp.course_b_id;
-    const { course_a_id, course_b_id } = comp;
 
-    // Only process comparisons involving courses in our set
-    if (!wins.has(course_a_id) || !wins.has(course_b_id)) continue;
-
+    // Wins include Laplace pseudo-counts added later
     wins.set(winnerId, (wins.get(winnerId) ?? 0) + 1);
-    compCounts.set(course_a_id, (compCounts.get(course_a_id) ?? 0) + 1);
-    compCounts.set(course_b_id, (compCounts.get(course_b_id) ?? 0) + 1);
+    compCounts.set(comp.course_a_id, (compCounts.get(comp.course_a_id) ?? 0) + 1);
+    compCounts.set(comp.course_b_id, (compCounts.get(comp.course_b_id) ?? 0) + 1);
+    uniqueOpponents.get(comp.course_a_id)!.add(comp.course_b_id);
+    uniqueOpponents.get(comp.course_b_id)!.add(comp.course_a_id);
 
-    // Track how many times each pair was compared
-    const graphA = comparisonGraph.get(course_a_id)!;
-    graphA.set(course_b_id, (graphA.get(course_b_id) ?? 0) + 1);
-
-    const graphB = comparisonGraph.get(course_b_id)!;
-    graphB.set(course_a_id, (graphB.get(course_a_id) ?? 0) + 1);
+    // Canonical edge key (asymmetric — no double-counting)
+    const edgeKey =
+      comp.course_a_id < comp.course_b_id
+        ? `${comp.course_a_id}:${comp.course_b_id}`
+        : `${comp.course_b_id}:${comp.course_a_id}`;
+    edgeMap.set(edgeKey, (edgeMap.get(edgeKey) ?? 0) + 1);
   }
 
-  // Identify courses with at least one comparison (BT requires this)
+  // Identify active (compared) vs inactive (uncompared) courses
   const activeCourses = courseIds.filter((id) => (compCounts.get(id) ?? 0) > 0);
   const inactiveCourses = courseIds.filter((id) => (compCounts.get(id) ?? 0) === 0);
 
-  // Initialize scores
-  const scores = new Map<string, number>();
+  // Find connected components among active courses
+  const components = findConnectedComponents(activeCourses, relevantComps);
+
+  // Apply Laplace smoothing: add pseudo-counts for each observed edge.
+  // This ensures every course has at least some fractional wins, preventing
+  // division-by-zero for all-losses courses while preserving relative ordering.
+  const smoothedWins = new Map<string, number>();
   for (const id of activeCourses) {
-    scores.set(id, 1.0);
+    smoothedWins.set(id, wins.get(id) ?? 0);
+  }
+  const smoothedEdgeMap = new Map<string, number>();
+  for (const [key, count] of edgeMap) {
+    smoothedEdgeMap.set(key, count + 2 * LAPLACE_PSEUDO_COUNT);
+    // Add pseudo-wins for both sides of each edge
+    const [idA, idB] = key.split(":");
+    smoothedWins.set(idA, (smoothedWins.get(idA) ?? 0) + LAPLACE_PSEUDO_COUNT);
+    smoothedWins.set(idB, (smoothedWins.get(idB) ?? 0) + LAPLACE_PSEUDO_COUNT);
   }
 
-  // Iterative MLE (MM algorithm)
-  if (activeCourses.length >= 2) {
+  // Run BT-MLE independently per connected component
+  const scores = new Map<string, number>();
+
+  for (const component of components) {
+    const componentIds = Array.from(component);
+
+    if (componentIds.length === 1) {
+      scores.set(componentIds[0], 1.0);
+      continue;
+    }
+
+    // Initialize scores
+    for (const id of componentIds) {
+      scores.set(id, 1.0);
+    }
+
+    // Iterative MLE (MM algorithm)
     for (let iter = 0; iter < MAX_ITERATIONS; iter++) {
       let maxDelta = 0;
 
-      for (const i of activeCourses) {
-        const w_i = wins.get(i) ?? 0;
-        if (w_i === 0) {
-          // Course lost every comparison — set small but nonzero score
-          const oldScore = scores.get(i) ?? 1.0;
-          const newScore = 0.01;
-          maxDelta = Math.max(maxDelta, Math.abs(newScore - oldScore));
-          scores.set(i, newScore);
-          continue;
-        }
+      for (const i of componentIds) {
+        const w_i = smoothedWins.get(i) ?? 0;
 
-        const neighbors = comparisonGraph.get(i)!;
+        // Compute denominator by iterating over edges involving i
         let denominator = 0;
+        for (const j of componentIds) {
+          if (i === j) continue;
+          const edgeKey = i < j ? `${i}:${j}` : `${j}:${i}`;
+          const n_ij = smoothedEdgeMap.get(edgeKey);
+          if (n_ij === undefined) continue;
 
-        for (const [j, n_ij] of neighbors) {
-          const score_i = scores.get(i) ?? 1.0;
-          const score_j = scores.get(j) ?? 1.0;
+          const score_i = scores.get(i)!;
+          const score_j = scores.get(j)!;
           denominator += n_ij / (score_i + score_j);
         }
 
         if (denominator === 0) continue;
 
         const newScore = w_i / denominator;
-        const oldScore = scores.get(i) ?? 1.0;
+        const oldScore = scores.get(i)!;
         maxDelta = Math.max(maxDelta, Math.abs(newScore - oldScore));
         scores.set(i, newScore);
       }
 
       if (maxDelta < CONVERGENCE_THRESHOLD) break;
     }
+
+    // Normalize within component: max = 10.0
+    let maxComponentScore = 0;
+    for (const id of componentIds) {
+      maxComponentScore = Math.max(maxComponentScore, scores.get(id) ?? 0);
+    }
+    if (maxComponentScore > 0) {
+      for (const id of componentIds) {
+        scores.set(id, ((scores.get(id) ?? 0) / maxComponentScore) * 10);
+      }
+    }
   }
 
-  // Normalize scores: max active score = 10.0
-  const maxScore = Math.max(...Array.from(scores.values()), 0.01);
-  for (const [id, score] of scores) {
-    scores.set(id, (score / maxScore) * 10);
-  }
-
-  // Build results: active courses with BT scores, inactive with default
-  const totalCourses = courseIds.length;
-  const logN = Math.ceil(Math.log2(Math.max(totalCourses, 2)));
-
+  // Build results
+  const totalActive = activeCourses.length;
   const results: RankingEntry[] = [];
 
   for (const id of activeCourses) {
     const count = compCounts.get(id) ?? 0;
+    const opponents = uniqueOpponents.get(id)?.size ?? 0;
+    // Confidence = fraction of other active courses compared against
+    const confidence = totalActive > 1 ? opponents / (totalActive - 1) : 0;
+
     results.push({
       course_id: id,
       bt_score: round(scores.get(id) ?? 0, 4),
       rank: 0, // Set after sorting
       comparison_count: count,
-      confidence: round(Math.min(1.0, count / logN), 3),
+      confidence: round(Math.min(1.0, confidence), 3),
     });
   }
 

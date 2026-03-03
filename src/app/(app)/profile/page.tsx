@@ -1,9 +1,10 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
+import { LoadError } from "@/components/load-error";
 import { useTheme } from "@/components/theme-provider";
 import { computeRankings, overallConfidence } from "@/lib/ranking/bradley-terry";
 import type { Course, Comparison } from "@/types/database";
@@ -16,12 +17,15 @@ export default function ProfilePage() {
   const [confidence, setConfidence] = useState(0);
   const [topCourse, setTopCourse] = useState<Course | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
   const router = useRouter();
   const supabase = createClient();
   const { theme, setTheme } = useTheme();
 
-  useEffect(() => {
-    async function load() {
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(false);
+    try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
@@ -58,16 +62,25 @@ export default function ProfilePage() {
           if (topUc) setTopCourse(topUc.courses);
         }
       }
-
+    } catch {
+      setError(true);
+    } finally {
       setLoading(false);
     }
-    load();
   }, [supabase]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
 
   async function handleSignOut() {
     await supabase.auth.signOut();
     router.push("/login");
     router.refresh();
+  }
+
+  if (error) {
+    return <LoadError onRetry={load} />;
   }
 
   if (loading) {

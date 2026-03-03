@@ -6,6 +6,8 @@ import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import { canonicalizePair } from "@/lib/utils";
 import { computeRankings } from "@/lib/ranking/bradley-terry";
+import { trackEvent } from "@/lib/events";
+import { LoadError } from "@/components/load-error";
 import type { Course, Comparison, RankingEntry } from "@/types/database";
 
 const SESSION_SIZE = 10;
@@ -16,15 +18,17 @@ export default function ComparePage() {
   const [pair, setPair] = useState<[Course, Course] | null>(null);
   const [sessionCount, setSessionCount] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
   const [choosing, setChoosing] = useState<string | null>(null);
   const comparisonStartRef = useRef<number>(0);
   const router = useRouter();
   const supabase = createClient();
 
-  // Load data on mount
-  useEffect(() => {
-    async function load() {
+  const loadData = useCallback(async () => {
+    setLoading(true);
+    setError(false);
+    try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
       setUserId(user.id);
@@ -45,10 +49,17 @@ export default function ComparePage() {
       );
       setCourses(userCourses);
       setComparisons(compsRes.data ?? []);
+    } catch {
+      setError(true);
+    } finally {
       setLoading(false);
     }
-    load();
   }, [supabase]);
+
+  // Load data on mount
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
 
   // Select next pair using the Swiss-tournament algorithm
   const selectNextPair = useCallback((): [Course, Course] | null => {
@@ -204,20 +215,13 @@ export default function ComparePage() {
       .then();
 
     // Log implicit signal
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (supabase.from("user_events") as any)
-      .insert({
-        user_id: userId,
-        event_type: "comparison_completed",
-        payload: {
-          course_a_id: canonical.course_a_id,
-          course_b_id: canonical.course_b_id,
-          winner: canonical.winner,
-          decided_in_ms: decidedInMs,
-          session_index: newSessionCount,
-        },
-      })
-      .then();
+    trackEvent(supabase, userId, "comparison_completed", {
+      course_a_id: canonical.course_a_id,
+      course_b_id: canonical.course_b_id,
+      winner: canonical.winner,
+      decided_in_ms: decidedInMs,
+      session_index: newSessionCount,
+    });
 
     // Persist ranking cache (debounced via session boundary)
     if (newSessionCount % 5 === 0 || newSessionCount >= SESSION_SIZE) {
@@ -261,6 +265,10 @@ export default function ComparePage() {
         router.push("/rankings");
       }
     }, 400);
+  }
+
+  if (error) {
+    return <LoadError onRetry={loadData} />;
   }
 
   if (loading) {

@@ -6,10 +6,7 @@
  * Phase 2 ML pipeline reads these for feature engineering.
  */
 
-import type { SupabaseClient } from "@supabase/supabase-js";
-import type { Database } from "@/types/database";
-
-type EventType =
+export type EventType =
   | "search_query"
   | "course_view"
   | "course_add"
@@ -20,18 +17,23 @@ type EventType =
   | "session_start"
   | "session_end";
 
+interface SupabaseLike {
+  from: (table: string) => {
+    insert: (row: Record<string, unknown>) => { then: () => void };
+  };
+}
+
 /**
  * Log an implicit signal event. Fire-and-forget — never blocks UI.
  */
 export function trackEvent(
-  supabase: SupabaseClient<Database>,
+  supabase: SupabaseLike,
   userId: string,
   eventType: EventType,
   payload: Record<string, unknown> = {}
 ) {
-  // Non-blocking insert
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (supabase.from("user_events") as any)
+  supabase
+    .from("user_events")
     .insert({ user_id: userId, event_type: eventType, payload })
     .then();
 }

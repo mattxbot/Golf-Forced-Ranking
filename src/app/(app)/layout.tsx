@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { BottomNav } from "@/components/bottom-nav";
+import { ErrorBoundary } from "@/components/error-boundary";
 
 export default async function AppLayout({
   children,
@@ -16,7 +17,9 @@ export default async function AppLayout({
 
   return (
     <div className="mx-auto min-h-dvh max-w-md pb-20">
-      {children}
+      <ErrorBoundary>
+        {children}
+      </ErrorBoundary>
       <BottomNav />
     </div>
   );

@@ -4,6 +4,8 @@ import { useState, useEffect, useCallback } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { trackEvent } from "@/lib/events";
+import { LoadError } from "@/components/load-error";
 import type { Course } from "@/types/database";
 
 export default function CoursesPage() {
@@ -12,12 +14,15 @@ export default function CoursesPage() {
   const [myCourses, setMyCourses] = useState<(Course & { user_course_id: string })[]>([]);
   const [myCourseIds, setMyCourseIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(false);
+  const [initLoading, setInitLoading] = useState(true);
+  const [initError, setInitError] = useState(false);
   const [adding, setAdding] = useState<string | null>(null);
   const supabase = createClient();
 
-  // Load user's courses on mount
-  useEffect(() => {
-    async function loadMyCourses() {
+  const loadMyCourses = useCallback(async () => {
+    setInitLoading(true);
+    setInitError(false);
+    try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
@@ -37,9 +42,17 @@ export default function CoursesPage() {
         setMyCourses(courses);
         setMyCourseIds(new Set(data.map((uc) => uc.course_id)));
       }
+    } catch {
+      setInitError(true);
+    } finally {
+      setInitLoading(false);
     }
-    loadMyCourses();
   }, [supabase]);
+
+  // Load user's courses on mount
+  useEffect(() => {
+    loadMyCourses();
+  }, [loadMyCourses]);
 
   // Search courses
   const searchCourses = useCallback(async (query: string) => {
@@ -71,12 +84,7 @@ export default function CoursesPage() {
     if (!user) return;
 
     // Log event (RecSys implicit signal)
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await (supabase.from("user_events") as any).insert({
-      user_id: user.id,
-      event_type: "course_add",
-      payload: { course_id: courseId },
-    });
+    trackEvent(supabase, user.id, "course_add", { course_id: courseId });
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data } = await (supabase.from("user_courses") as any)
@@ -101,12 +109,7 @@ export default function CoursesPage() {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await (supabase.from("user_events") as any).insert({
-      user_id: user.id,
-      event_type: "course_remove",
-      payload: { course_id: courseId },
-    });
+    trackEvent(supabase, user.id, "course_remove", { course_id: courseId });
 
     await supabase.from("user_courses").delete().eq("id", userCourseId);
     setMyCourses((prev) => prev.filter((c) => c.user_course_id !== userCourseId));
@@ -115,6 +118,21 @@ export default function CoursesPage() {
       next.delete(courseId);
       return next;
     });
+  }
+
+  if (initError) {
+    return <LoadError onRetry={loadMyCourses} />;
+  }
+
+  if (initLoading) {
+    return (
+      <div className="flex items-center justify-center pt-32">
+        <div className="flex flex-col items-center gap-3">
+          <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+          <p className="text-sm text-muted-foreground">Loading courses...</p>
+        </div>
+      </div>
+    );
   }
 
   return (
