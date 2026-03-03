@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   computeRankings,
+  computeRankingsDetailed,
   overallConfidence,
   findConnectedComponents,
   type ComparisonInput,
@@ -157,19 +158,9 @@ describe("computeRankings: disconnected graph", () => {
   });
 });
 
-// ─── confidence metric ───────────────────────────────────────────────
+// ─── confidence metric (v3: weighted coverage) ─────────────────────────
 describe("computeRankings: confidence", () => {
-  it("confidence = unique_opponents / (N_active - 1)", () => {
-    const comps: ComparisonInput[] = [
-      c("a", "b", "a"), c("a", "c", "a"), c("b", "c", "b"),
-    ];
-    // 3 active courses; each compared to 2 others → 2/2 = 1.0
-    const result = computeRankings(["a", "b", "c", "d"], comps);
-    expect(result.find((r) => r.course_id === "a")!.confidence).toBe(1.0);
-    expect(result.find((r) => r.course_id === "b")!.confidence).toBe(1.0);
-  });
-
-  it("fewer unique opponents → lower confidence", () => {
+  it("higher confidence with more unique opponents", () => {
     const comps: ComparisonInput[] = [
       c("a", "x", "a"),                                          // X: 1 opponent
       c("a", "y", "y"), c("b", "y", "y"), c("c", "y", "y"),     // Y: 3 opponents
@@ -180,6 +171,45 @@ describe("computeRankings: confidence", () => {
     const xConf = result.find((r) => r.course_id === "x")!.confidence;
     const yConf = result.find((r) => r.course_id === "y")!.confidence;
     expect(yConf).toBeGreaterThan(xConf);
+  });
+
+  it("repeat comparisons increase confidence (diminishing returns)", () => {
+    // Same opponent but compared multiple times
+    const comps1: ComparisonInput[] = [c("a", "b", "a")];
+    const comps3: ComparisonInput[] = [
+      c("a", "b", "a"), c("a", "b", "a"), c("a", "b", "a"),
+    ];
+    const result1 = computeRankings(["a", "b"], comps1);
+    const result3 = computeRankings(["a", "b"], comps3);
+    const conf1 = result1.find((r) => r.course_id === "a")!.confidence;
+    const conf3 = result3.find((r) => r.course_id === "a")!.confidence;
+    expect(conf3).toBeGreaterThan(conf1);
+  });
+
+  it("confidence is zero for inactive courses", () => {
+    const result = computeRankings(["a", "b", "c"], [c("a", "b", "a")]);
+    expect(result.find((r) => r.course_id === "c")!.confidence).toBe(0);
+  });
+});
+
+// ─── tie-breaking ───────────────────────────────────────────────────
+describe("computeRankings: tie-breaking", () => {
+  it("deterministic rank for tied scores", () => {
+    // Two disconnected pairs → both leaders get 10.0
+    const comps: ComparisonInput[] = [c("a", "b", "a"), c("c", "d", "c")];
+    const r1 = computeRankings(["a", "b", "c", "d"], comps);
+    const r2 = computeRankings(["a", "b", "c", "d"], comps);
+    // Same ranking order every time
+    expect(r1.map((r) => r.course_id)).toEqual(r2.map((r) => r.course_id));
+  });
+
+  it("ties broken by confidence then comparison_count then course_id", () => {
+    // Two disconnected pairs with equal scores
+    const comps: ComparisonInput[] = [c("a", "b", "a"), c("c", "d", "c")];
+    const result = computeRankings(["a", "b", "c", "d"], comps);
+    // Both a and c score 10.0 — tie-break falls to course_id: "a" < "c"
+    expect(result[0].course_id).toBe("a");
+    expect(result[1].course_id).toBe("c");
   });
 });
 
@@ -194,6 +224,34 @@ describe("computeRankings: no double-counting", () => {
     ]);
     expect(r1[0].course_id).toBe(r2[0].course_id);
     expect(r1[0].bt_score).toBeCloseTo(r2[0].bt_score, 3);
+  });
+});
+
+// ─── computeRankingsDetailed ─────────────────────────────────────────
+describe("computeRankingsDetailed", () => {
+  it("reports convergence for simple cases", () => {
+    const comps: ComparisonInput[] = [
+      c("a", "b", "a"), c("a", "c", "a"), c("b", "c", "b"),
+    ];
+    const result = computeRankingsDetailed(["a", "b", "c"], comps);
+    expect(result.converged).toBe(true);
+    expect(result.iterations).toBeGreaterThan(0);
+    expect(result.iterations).toBeLessThanOrEqual(50);
+    expect(result.maxDelta).toBeLessThan(1e-8);
+  });
+
+  it("returns same rankings as computeRankings", () => {
+    const comps: ComparisonInput[] = [
+      c("a", "b", "a"), c("a", "c", "a"), c("b", "c", "b"),
+    ];
+    const detailed = computeRankingsDetailed(["a", "b", "c"], comps);
+    const simple = computeRankings(["a", "b", "c"], comps);
+    expect(detailed.rankings).toEqual(simple);
+  });
+
+  it("reports no iterations for empty/single inputs", () => {
+    expect(computeRankingsDetailed([], []).iterations).toBe(0);
+    expect(computeRankingsDetailed(["a"], []).iterations).toBe(0);
   });
 });
 

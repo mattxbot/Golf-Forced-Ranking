@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
+import { signupSchema } from "@/lib/validation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
@@ -19,15 +20,23 @@ export default function SignupPage() {
   async function handleSignup(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+
+    // Validate inputs before hitting Supabase
+    const parsed = signupSchema.safeParse({ email, password, username });
+    if (!parsed.success) {
+      setError(parsed.error.issues[0].message);
+      return;
+    }
+
     setLoading(true);
 
     const { error } = await supabase.auth.signUp({
-      email,
-      password,
+      email: parsed.data.email,
+      password: parsed.data.password,
       options: {
         data: {
-          username: username.toLowerCase().trim(),
-          display_name: username.trim(),
+          username: parsed.data.username.toLowerCase(),
+          display_name: parsed.data.username,
         },
       },
     });
@@ -36,7 +45,7 @@ export default function SignupPage() {
       setError(error.message);
       setLoading(false);
     } else {
-      router.push("/rankings");
+      router.push("/");
       router.refresh();
     }
   }

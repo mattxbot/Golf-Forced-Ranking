@@ -1,5 +1,5 @@
 /**
- * Bradley-Terry ranking engine.
+ * Bradley-Terry ranking engine (v3).
  *
  * Computes latent quality scores from pairwise comparison data via
  * maximum likelihood estimation. Pure function, no side effects.
@@ -7,6 +7,11 @@
  * Algorithm: iterative MLE (MM algorithm for BT model)
  *   θ_i = w_i / Σ_j [n_ij / (θ_i + θ_j)]
  * where w_i = total wins for item i, n_ij = total comparisons between i and j.
+ *
+ * v3 changes over v2:
+ * - Improved confidence metric: weighted by sqrt(comparison_count) per opponent
+ * - Deterministic tie-breaking: confidence > comparison_count > course_id
+ * - Convergence metadata returned via computeRankingsDetailed()
  *
  * Reference: Hunter, 2004. "MM algorithms for generalized Bradley-Terry models."
  */
@@ -19,7 +24,14 @@ export interface ComparisonInput {
   winner: "a" | "b";
 }
 
-export const ALGORITHM_VERSION = 2;
+export interface RankingComputeResult {
+  rankings: RankingEntry[];
+  converged: boolean;
+  iterations: number;
+  maxDelta: number;
+}
+
+export const ALGORITHM_VERSION = 3;
 const MAX_ITERATIONS = 50;
 const CONVERGENCE_THRESHOLD = 1e-8;
 const LAPLACE_PSEUDO_COUNT = 0.5;
@@ -69,33 +81,30 @@ export function findConnectedComponents(
 }
 
 /**
- * Compute Bradley-Terry rankings from pairwise comparisons.
- *
- * Fixes over v1:
- * - Stores edges asymmetrically (only a→b where a < b) to prevent double-counting
- * - Detects disconnected components and ranks within each independently
- * - Uses Laplace smoothing instead of hardcoded scores for all-losses case
- * - Confidence based on unique opponents rather than raw comparison count
- *
- * @param courseIds - All course IDs to rank
- * @param comparisons - Pairwise comparison outcomes
- * @returns Ranked list with BT scores, positions, and confidence
+ * Compute Bradley-Terry rankings with full convergence metadata.
  */
-export function computeRankings(
+export function computeRankingsDetailed(
   courseIds: string[],
   comparisons: ComparisonInput[]
-): RankingEntry[] {
-  if (courseIds.length === 0) return [];
+): RankingComputeResult {
+  if (courseIds.length === 0) {
+    return { rankings: [], converged: true, iterations: 0, maxDelta: 0 };
+  }
   if (courseIds.length === 1) {
-    return [
-      {
-        course_id: courseIds[0],
-        bt_score: 1.0,
-        rank: 1,
-        comparison_count: 0,
-        confidence: 0,
-      },
-    ];
+    return {
+      rankings: [
+        {
+          course_id: courseIds[0],
+          bt_score: 1.0,
+          rank: 1,
+          comparison_count: 0,
+          confidence: 0,
+        },
+      ],
+      converged: true,
+      iterations: 0,
+      maxDelta: 0,
+    };
   }
 
   const courseSet = new Set(courseIds);
@@ -105,30 +114,32 @@ export function computeRankings(
     (c) => courseSet.has(c.course_a_id) && courseSet.has(c.course_b_id)
   );
 
-  // Build win counts, comparison counts, and unique opponents
+  // Build win counts, comparison counts, and per-opponent comparison counts
   const wins = new Map<string, number>();
   const compCounts = new Map<string, number>();
-  const uniqueOpponents = new Map<string, Set<string>>();
+  const opponentCounts = new Map<string, Map<string, number>>();
 
   for (const id of courseIds) {
     wins.set(id, 0);
     compCounts.set(id, 0);
-    uniqueOpponents.set(id, new Set());
+    opponentCounts.set(id, new Map());
   }
 
   // Asymmetric edge map: only store (min_id, max_id) to prevent double-counting.
-  // Key: "idA:idB" where idA < idB. Value: total comparisons between them.
   const edgeMap = new Map<string, number>();
 
   for (const comp of relevantComps) {
     const winnerId = comp.winner === "a" ? comp.course_a_id : comp.course_b_id;
 
-    // Wins include Laplace pseudo-counts added later
     wins.set(winnerId, (wins.get(winnerId) ?? 0) + 1);
     compCounts.set(comp.course_a_id, (compCounts.get(comp.course_a_id) ?? 0) + 1);
     compCounts.set(comp.course_b_id, (compCounts.get(comp.course_b_id) ?? 0) + 1);
-    uniqueOpponents.get(comp.course_a_id)!.add(comp.course_b_id);
-    uniqueOpponents.get(comp.course_b_id)!.add(comp.course_a_id);
+
+    // Track per-opponent comparison counts
+    const aOpps = opponentCounts.get(comp.course_a_id)!;
+    aOpps.set(comp.course_b_id, (aOpps.get(comp.course_b_id) ?? 0) + 1);
+    const bOpps = opponentCounts.get(comp.course_b_id)!;
+    bOpps.set(comp.course_a_id, (bOpps.get(comp.course_a_id) ?? 0) + 1);
 
     // Canonical edge key (asymmetric — no double-counting)
     const edgeKey =
@@ -146,8 +157,6 @@ export function computeRankings(
   const components = findConnectedComponents(activeCourses, relevantComps);
 
   // Apply Laplace smoothing: add pseudo-counts for each observed edge.
-  // This ensures every course has at least some fractional wins, preventing
-  // division-by-zero for all-losses courses while preserving relative ordering.
   const smoothedWins = new Map<string, number>();
   for (const id of activeCourses) {
     smoothedWins.set(id, wins.get(id) ?? 0);
@@ -155,7 +164,6 @@ export function computeRankings(
   const smoothedEdgeMap = new Map<string, number>();
   for (const [key, count] of edgeMap) {
     smoothedEdgeMap.set(key, count + 2 * LAPLACE_PSEUDO_COUNT);
-    // Add pseudo-wins for both sides of each edge
     const [idA, idB] = key.split(":");
     smoothedWins.set(idA, (smoothedWins.get(idA) ?? 0) + LAPLACE_PSEUDO_COUNT);
     smoothedWins.set(idB, (smoothedWins.get(idB) ?? 0) + LAPLACE_PSEUDO_COUNT);
@@ -163,6 +171,9 @@ export function computeRankings(
 
   // Run BT-MLE independently per connected component
   const scores = new Map<string, number>();
+  let globalConverged = true;
+  let totalIterations = 0;
+  let globalMaxDelta = 0;
 
   for (const component of components) {
     const componentIds = Array.from(component);
@@ -178,13 +189,17 @@ export function computeRankings(
     }
 
     // Iterative MLE (MM algorithm)
+    let componentConverged = false;
+    let componentIter = 0;
+    let maxDelta = 0;
+
     for (let iter = 0; iter < MAX_ITERATIONS; iter++) {
-      let maxDelta = 0;
+      maxDelta = 0;
+      componentIter = iter + 1;
 
       for (const i of componentIds) {
         const w_i = smoothedWins.get(i) ?? 0;
 
-        // Compute denominator by iterating over edges involving i
         let denominator = 0;
         for (const j of componentIds) {
           if (i === j) continue;
@@ -205,8 +220,15 @@ export function computeRankings(
         scores.set(i, newScore);
       }
 
-      if (maxDelta < CONVERGENCE_THRESHOLD) break;
+      if (maxDelta < CONVERGENCE_THRESHOLD) {
+        componentConverged = true;
+        break;
+      }
     }
+
+    if (!componentConverged) globalConverged = false;
+    totalIterations = Math.max(totalIterations, componentIter);
+    globalMaxDelta = Math.max(globalMaxDelta, maxDelta);
 
     // Normalize within component: max = 10.0
     let maxComponentScore = 0;
@@ -220,27 +242,51 @@ export function computeRankings(
     }
   }
 
-  // Build results
+  // Build results with improved confidence metric
   const totalActive = activeCourses.length;
   const results: RankingEntry[] = [];
 
   for (const id of activeCourses) {
     const count = compCounts.get(id) ?? 0;
-    const opponents = uniqueOpponents.get(id)?.size ?? 0;
-    // Confidence = fraction of other active courses compared against
-    const confidence = totalActive > 1 ? opponents / (totalActive - 1) : 0;
+    const oppMap = opponentCounts.get(id) ?? new Map();
+
+    // Improved confidence: weighted by sqrt(comparisons per opponent)
+    // This rewards both breadth (many opponents) and depth (repeat comparisons)
+    // while diminishing returns from repeatedly comparing the same pair.
+    let weightedCoverage = 0;
+    for (const [, compCount] of oppMap) {
+      weightedCoverage += Math.sqrt(compCount);
+    }
+    // Normalize: perfect = compared to every other active course sqrt(3) times each
+    const maxPossible =
+      totalActive > 1 ? Math.sqrt(3) * (totalActive - 1) : 1;
+    const confidence = totalActive > 1
+      ? Math.min(1.0, weightedCoverage / maxPossible)
+      : 0;
 
     results.push({
       course_id: id,
       bt_score: round(scores.get(id) ?? 0, 4),
-      rank: 0, // Set after sorting
+      rank: 0,
       comparison_count: count,
-      confidence: round(Math.min(1.0, confidence), 3),
+      confidence: round(confidence, 3),
     });
   }
 
-  // Sort by BT score descending
-  results.sort((a, b) => b.bt_score - a.bt_score);
+  // Sort by BT score with deterministic tie-breaking
+  results.sort((a, b) => {
+    const scoreDiff = b.bt_score - a.bt_score;
+    if (Math.abs(scoreDiff) > 0.0001) return scoreDiff;
+    // Tie-break 1: higher confidence first
+    const confDiff = b.confidence - a.confidence;
+    if (Math.abs(confDiff) > 0.001) return confDiff;
+    // Tie-break 2: more comparisons first
+    if (a.comparison_count !== b.comparison_count) {
+      return b.comparison_count - a.comparison_count;
+    }
+    // Tie-break 3: lexicographic course_id for full determinism
+    return a.course_id.localeCompare(b.course_id);
+  });
 
   // Assign ranks
   for (let i = 0; i < results.length; i++) {
@@ -258,7 +304,23 @@ export function computeRankings(
     });
   }
 
-  return results;
+  return {
+    rankings: results,
+    converged: globalConverged,
+    iterations: totalIterations,
+    maxDelta: round(globalMaxDelta, 12),
+  };
+}
+
+/**
+ * Compute Bradley-Terry rankings from pairwise comparisons.
+ * Convenience wrapper that returns just the rankings array.
+ */
+export function computeRankings(
+  courseIds: string[],
+  comparisons: ComparisonInput[]
+): RankingEntry[] {
+  return computeRankingsDetailed(courseIds, comparisons).rankings;
 }
 
 /**

@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { canonicalizePair } from "@/lib/utils";
 import { computeRankings, ALGORITHM_VERSION } from "@/lib/ranking/bradley-terry";
 import { trackEvent } from "@/lib/events";
+import { searchQuerySchema } from "@/lib/validation";
 import type { Course, Comparison } from "@/types/database";
 
 const MIN_COURSES = 3;
@@ -64,15 +65,16 @@ export default function OnboardingPage() {
   // Debounced search
   const searchCourses = useCallback(
     async (query: string) => {
-      if (query.length < 2) {
+      const parsed = searchQuerySchema.safeParse(query);
+      if (!parsed.success) {
         setResults([]);
         return;
       }
       setSearching(true);
       const { data } = await supabase
         .from("courses")
-        .select("*")
-        .ilike("name", `%${query}%`)
+        .select("id, name, slug, city, state_province, course_type, architect, year_built, holes, par")
+        .ilike("name", `%${parsed.data}%`)
         .order("name")
         .limit(15);
       setResults(data ?? []);

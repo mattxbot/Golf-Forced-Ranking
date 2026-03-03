@@ -5,6 +5,7 @@ import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { trackEvent } from "@/lib/events";
+import { searchQuerySchema } from "@/lib/validation";
 import { LoadError } from "@/components/load-error";
 import type { Course } from "@/types/database";
 
@@ -17,6 +18,7 @@ export default function CoursesPage() {
   const [initLoading, setInitLoading] = useState(true);
   const [initError, setInitError] = useState(false);
   const [adding, setAdding] = useState<string | null>(null);
+  const [userId, setUserId] = useState<string | null>(null);
   const supabase = createClient();
 
   const loadMyCourses = useCallback(async () => {
@@ -25,6 +27,7 @@ export default function CoursesPage() {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
+      setUserId(user.id);
 
       const { data } = await supabase
         .from("user_courses")
@@ -54,23 +57,33 @@ export default function CoursesPage() {
     loadMyCourses();
   }, [loadMyCourses]);
 
-  // Search courses
+  // Search courses with validated input
   const searchCourses = useCallback(async (query: string) => {
-    if (query.length < 2) {
+    const parsed = searchQuerySchema.safeParse(query);
+    if (!parsed.success) {
       setResults([]);
       return;
     }
     setLoading(true);
     const { data } = await supabase
       .from("courses")
-      .select("*")
-      .ilike("name", `%${query}%`)
+      .select("id, name, slug, city, state_province, course_type, architect, year_built, holes, par")
+      .ilike("name", `%${parsed.data}%`)
       .order("name")
       .limit(20);
 
-    setResults(data ?? []);
+    const resultList = data ?? [];
+    setResults(resultList);
     setLoading(false);
-  }, [supabase]);
+
+    // Track search signal for recommendation quality
+    if (userId) {
+      trackEvent(supabase, userId, "search_query", {
+        query: parsed.data,
+        result_count: resultList.length,
+      });
+    }
+  }, [supabase, userId]);
 
   // Debounced search
   useEffect(() => {

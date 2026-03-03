@@ -190,13 +190,26 @@ export default function ComparePage() {
   // Select initial pair after data loads
   useEffect(() => {
     if (!loading && courses.length >= 2 && !pair) {
+      if (userId) {
+        trackEvent(supabase, userId, "session_start", {
+          course_count: courses.length,
+          comparison_count: comparisons.length,
+        });
+      }
       const nextPair = selectNextPair();
       if (nextPair) {
         setPair(nextPair);
         comparisonStartRef.current = Date.now();
+        if (userId) {
+          trackEvent(supabase, userId, "comparison_presented", {
+            course_a_id: nextPair[0].id,
+            course_b_id: nextPair[1].id,
+            session_index: 0,
+          });
+        }
       }
     }
-  }, [loading, courses, pair, selectNextPair]);
+  }, [loading, courses, pair, selectNextPair, userId, supabase, comparisons.length]);
 
   async function handleChoice(winnerId: string) {
     if (!pair || !userId || choosing) return;
@@ -289,6 +302,9 @@ export default function ComparePage() {
       ];
       const postRankings = computeRankings(courses.map((c) => c.id), allComps);
       setPostSessionRankings(postRankings);
+      trackEvent(supabase, userId, "session_end", {
+        comparisons_made: newSessionCount,
+      });
       setTimeout(() => {
         setChoosing(null);
         setSessionComplete(true);
@@ -303,7 +319,15 @@ export default function ComparePage() {
       if (nextPair) {
         setPair(nextPair);
         comparisonStartRef.current = Date.now();
+        trackEvent(supabase, userId, "comparison_presented", {
+          course_a_id: nextPair[0].id,
+          course_b_id: nextPair[1].id,
+          session_index: newSessionCount,
+        });
       } else {
+        trackEvent(supabase, userId, "session_end", {
+          comparisons_made: newSessionCount,
+        });
         router.push("/rankings");
       }
     }, 400);

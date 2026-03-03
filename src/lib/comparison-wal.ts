@@ -10,6 +10,7 @@
  */
 
 const WAL_KEY = "golf_comparison_wal";
+const DROPPED_KEY = "golf_comparison_dropped";
 const MAX_RETRIES = 5;
 
 export interface WalEntry {
@@ -37,6 +38,10 @@ interface SupabaseLike {
   };
 }
 
+// Subscriber for WAL status changes
+type WalStatusListener = (pending: number, dropped: number) => void;
+const listeners = new Set<WalStatusListener>();
+
 // ---------------------------------------------------------------------------
 // localStorage helpers
 // ---------------------------------------------------------------------------
@@ -58,9 +63,36 @@ function writeWal(entries: WalEntry[]): void {
   }
 }
 
+function incrementDropped(): number {
+  try {
+    const current = parseInt(localStorage.getItem(DROPPED_KEY) ?? "0", 10);
+    const next = current + 1;
+    localStorage.setItem(DROPPED_KEY, String(next));
+    return next;
+  } catch {
+    return 0;
+  }
+}
+
+function notifyListeners(pending: number, dropped: number): void {
+  for (const fn of listeners) {
+    try {
+      fn(pending, dropped);
+    } catch {
+      // ignore listener errors
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
+
+/** Subscribe to WAL status changes. Returns unsubscribe function. */
+export function onWalStatus(listener: WalStatusListener): () => void {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
+}
 
 /** Append a new comparison to the WAL and trigger a flush. */
 export function appendComparison(
@@ -94,6 +126,7 @@ export async function flushWal(supabase: SupabaseLike): Promise<void> {
   if (entries.length === 0) return;
 
   const remaining: WalEntry[] = [];
+  let droppedThisFlush = 0;
 
   for (const entry of entries) {
     try {
@@ -115,12 +148,25 @@ export async function flushWal(supabase: SupabaseLike): Promise<void> {
     } catch {
       if (entry.retries < MAX_RETRIES) {
         remaining.push({ ...entry, retries: entry.retries + 1 });
+      } else {
+        // Permanently failed — track it
+        const totalDropped = incrementDropped();
+        droppedThisFlush++;
+        console.warn(
+          `[WAL] Dropped comparison after ${MAX_RETRIES} retries:`,
+          entry.course_a_id, "vs", entry.course_b_id
+        );
+        notifyListeners(remaining.length, totalDropped);
       }
-      // After MAX_RETRIES the entry is silently dropped
     }
   }
 
   writeWal(remaining);
+
+  if (droppedThisFlush === 0) {
+    const dropped = parseInt(localStorage.getItem(DROPPED_KEY) ?? "0", 10);
+    notifyListeners(remaining.length, dropped);
+  }
 
   // Schedule retry for remaining entries with exponential back-off
   if (remaining.length > 0) {
@@ -133,4 +179,22 @@ export async function flushWal(supabase: SupabaseLike): Promise<void> {
 /** Returns the number of un-flushed entries (for UI indicators). */
 export function pendingCount(): number {
   return readWal().length;
+}
+
+/** Returns the total number of entries permanently dropped. */
+export function droppedCount(): number {
+  try {
+    return parseInt(localStorage.getItem(DROPPED_KEY) ?? "0", 10);
+  } catch {
+    return 0;
+  }
+}
+
+/** Clear the dropped counter (e.g., after user acknowledges). */
+export function clearDropped(): void {
+  try {
+    localStorage.removeItem(DROPPED_KEY);
+  } catch {
+    // ignore
+  }
 }
