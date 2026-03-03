@@ -180,6 +180,40 @@ export default function RankingsPage() {
         )}
       </div>
 
+      {/* Discovery suggestions */}
+      {(confidence < 40 || courseCount < 5) && (
+        <div className="mb-5 rounded-lg border border-dashed border-primary/30 bg-primary/5 p-3">
+          <p className="text-sm font-medium">
+            {courseCount < 5
+              ? "Add more courses to unlock better rankings"
+              : "Keep comparing to sharpen your list"}
+          </p>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            {courseCount < 5
+              ? `You have ${courseCount} courses. Adding more gives the algorithm more to work with.`
+              : `${comparisonCount} comparisons so far \u2014 a few more sessions will stabilize your top picks.`}
+          </p>
+          <div className="mt-2 flex gap-2">
+            {courseCount < 10 && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => router.push("/courses")}
+              >
+                Add courses
+              </Button>
+            )}
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => router.push("/compare")}
+            >
+              Compare more
+            </Button>
+          </div>
+        </div>
+      )}
+
       {/* Ranked list */}
       <div className="space-y-2">
         {rankings.map((entry) => {

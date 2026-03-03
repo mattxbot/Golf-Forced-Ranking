@@ -6,7 +6,7 @@ import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { canonicalizePair } from "@/lib/utils";
-import { computeRankings } from "@/lib/ranking/bradley-terry";
+import { computeRankings, ALGORITHM_VERSION } from "@/lib/ranking/bradley-terry";
 import { trackEvent } from "@/lib/events";
 import type { Course, Comparison } from "@/types/database";
 
@@ -180,6 +180,7 @@ export default function OnboardingPage() {
               user_id: userId,
               rankings,
               is_stale: false,
+              algorithm_version: ALGORITHM_VERSION,
               computed_at: new Date().toISOString(),
             },
             { onConflict: "user_id" }

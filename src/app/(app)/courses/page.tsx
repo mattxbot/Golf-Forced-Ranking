@@ -111,7 +111,23 @@ export default function CoursesPage() {
 
     trackEvent(supabase, user.id, "course_remove", { course_id: courseId });
 
-    await supabase.from("user_courses").delete().eq("id", userCourseId);
+    // Delete user_course and orphaned comparisons in parallel
+    await Promise.all([
+      supabase.from("user_courses").delete().eq("id", userCourseId),
+      supabase
+        .from("comparisons")
+        .delete()
+        .eq("user_id", user.id)
+        .or(`course_a_id.eq.${courseId},course_b_id.eq.${courseId}`),
+    ]);
+
+    // Mark ranking cache stale
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (supabase.from("user_ranking_cache") as any)
+      .update({ is_stale: true })
+      .eq("user_id", user.id)
+      .then();
+
     setMyCourses((prev) => prev.filter((c) => c.user_course_id !== userCourseId));
     setMyCourseIds((prev) => {
       const next = new Set(prev);

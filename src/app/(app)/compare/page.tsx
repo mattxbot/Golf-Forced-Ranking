@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import { canonicalizePair } from "@/lib/utils";
-import { computeRankings } from "@/lib/ranking/bradley-terry";
+import { computeRankings, ALGORITHM_VERSION } from "@/lib/ranking/bradley-terry";
 import { trackEvent } from "@/lib/events";
 import { appendComparison, flushWal } from "@/lib/comparison-wal";
 import { LoadError } from "@/components/load-error";
@@ -269,6 +269,7 @@ export default function ComparePage() {
             user_id: userId,
             rankings,
             is_stale: false,
+            algorithm_version: ALGORITHM_VERSION,
             computed_at: new Date().toISOString(),
           },
           { onConflict: "user_id" }
@@ -597,6 +598,26 @@ export default function ComparePage() {
           </div>
         ))}
       </div>
+
+      {/* Skip option */}
+      <button
+        className="mx-auto mt-4 text-xs text-muted-foreground underline-offset-2 hover:underline"
+        disabled={!!choosing}
+        onClick={() => {
+          if (!userId) return;
+          trackEvent(supabase, userId, "comparison_skipped", {
+            course_a_id: pair[0].id,
+            course_b_id: pair[1].id,
+          });
+          const nextPair = selectNextPair();
+          if (nextPair) {
+            setPair(nextPair);
+            comparisonStartRef.current = Date.now();
+          }
+        }}
+      >
+        Haven&apos;t played one of these? Skip
+      </button>
     </div>
   );
 }

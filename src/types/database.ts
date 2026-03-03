@@ -181,6 +181,7 @@ export interface Database {
           user_id: string;
           rankings: RankingEntry[];
           is_stale: boolean;
+          algorithm_version: number;
           computed_at: string;
           updated_at: string;
         };
@@ -189,11 +190,13 @@ export interface Database {
           user_id: string;
           rankings: RankingEntry[];
           is_stale?: boolean;
+          algorithm_version?: number;
           computed_at?: string;
         };
         Update: {
           rankings?: RankingEntry[];
           is_stale?: boolean;
+          algorithm_version?: number;
           computed_at?: string;
           updated_at?: string;
         };
