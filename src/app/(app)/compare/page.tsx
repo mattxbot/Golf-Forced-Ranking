@@ -8,7 +8,7 @@ import { canonicalizePair } from "@/lib/utils";
 import { computeRankings } from "@/lib/ranking/bradley-terry";
 import { trackEvent } from "@/lib/events";
 import { LoadError } from "@/components/load-error";
-import type { Course, Comparison, RankingEntry } from "@/types/database";
+import type { Course, Comparison } from "@/types/database";
 
 const SESSION_SIZE = 10;
 
@@ -22,6 +22,16 @@ export default function ComparePage() {
   const [userId, setUserId] = useState<string | null>(null);
   const [choosing, setChoosing] = useState<string | null>(null);
   const comparisonStartRef = useRef<number>(0);
+
+  // Refs to avoid stale closures in setTimeout callbacks
+  const coursesRef = useRef<Course[]>([]);
+  const comparisonsRef = useRef<Comparison[]>([]);
+  const sessionCountRef = useRef(0);
+
+  coursesRef.current = courses;
+  comparisonsRef.current = comparisons;
+  sessionCountRef.current = sessionCount;
+
   const router = useRouter();
   const supabase = createClient();
 
@@ -61,19 +71,24 @@ export default function ComparePage() {
     loadData();
   }, [loadData]);
 
-  // Select next pair using the Swiss-tournament algorithm
+  // Select next pair using the Swiss-tournament algorithm.
+  // Reads from refs so it always sees the latest state.
   const selectNextPair = useCallback((): [Course, Course] | null => {
-    if (courses.length < 2) return null;
+    const currentCourses = coursesRef.current;
+    const currentComparisons = comparisonsRef.current;
+    const currentSessionCount = sessionCountRef.current;
+
+    if (currentCourses.length < 2) return null;
 
     const compSet = new Set(
-      comparisons.map((c) => `${c.course_a_id}:${c.course_b_id}`)
+      currentComparisons.map((c) => `${c.course_a_id}:${c.course_b_id}`)
     );
 
     const compCountMap = new Map<string, number>();
-    for (const course of courses) {
+    for (const course of currentCourses) {
       compCountMap.set(course.id, 0);
     }
-    for (const comp of comparisons) {
+    for (const comp of currentComparisons) {
       compCountMap.set(comp.course_a_id, (compCountMap.get(comp.course_a_id) ?? 0) + 1);
       compCountMap.set(comp.course_b_id, (compCountMap.get(comp.course_b_id) ?? 0) + 1);
     }
@@ -87,27 +102,27 @@ export default function ComparePage() {
     }
 
     // Phase A: Bootstrap — ensure every course has at least one comparison
-    const uncompared = courses.filter((c) => (compCountMap.get(c.id) ?? 0) === 0);
+    const uncompared = currentCourses.filter((c) => (compCountMap.get(c.id) ?? 0) === 0);
     if (uncompared.length > 0) {
       const target = uncompared[0];
-      const others = courses.filter((c) => c.id !== target.id);
+      const others = currentCourses.filter((c) => c.id !== target.id);
       const partner = others[Math.floor(Math.random() * others.length)];
       return [target, partner];
     }
 
     // Compute rankings for informed pair selection
-    const rankings = computeRankings(courses.map((c) => c.id), comparisons);
+    const rankings = computeRankings(currentCourses.map((c) => c.id), currentComparisons);
     const sorted = [...rankings].sort((a, b) => b.bt_score - a.bt_score);
 
     // Phase B: Cross-rank exploration (every 5th comparison in session)
-    if (sessionCount % 5 === 4 && sorted.length >= 8) {
+    if (currentSessionCount % 5 === 4 && sorted.length >= 8) {
       const topQ = sorted.slice(0, Math.ceil(sorted.length / 4));
       const bottomQ = sorted.slice(Math.floor(sorted.length * 0.75));
       const t = topQ[Math.floor(Math.random() * topQ.length)];
       const b = bottomQ[Math.floor(Math.random() * bottomQ.length)];
       if (!isCompared(t.course_id, b.course_id)) {
-        const tc = courses.find((c) => c.id === t.course_id)!;
-        const bc = courses.find((c) => c.id === b.course_id)!;
+        const tc = currentCourses.find((c) => c.id === t.course_id)!;
+        const bc = currentCourses.find((c) => c.id === b.course_id)!;
         return [tc, bc];
       }
     }
@@ -118,8 +133,8 @@ export default function ComparePage() {
       const b = sorted[i + 1].course_id;
       if (!isCompared(a, b)) {
         return [
-          courses.find((c) => c.id === a)!,
-          courses.find((c) => c.id === b)!,
+          currentCourses.find((c) => c.id === a)!,
+          currentCourses.find((c) => c.id === b)!,
         ];
       }
     }
@@ -129,15 +144,15 @@ export default function ComparePage() {
     let bestScore = Infinity;
     const rankMap = new Map(rankings.map((r) => [r.course_id, r]));
 
-    for (let i = 0; i < courses.length; i++) {
-      for (let j = i + 1; j < courses.length; j++) {
-        if (!isCompared(courses[i].id, courses[j].id)) {
-          const confA = rankMap.get(courses[i].id)?.confidence ?? 0;
-          const confB = rankMap.get(courses[j].id)?.confidence ?? 0;
+    for (let i = 0; i < currentCourses.length; i++) {
+      for (let j = i + 1; j < currentCourses.length; j++) {
+        if (!isCompared(currentCourses[i].id, currentCourses[j].id)) {
+          const confA = rankMap.get(currentCourses[i].id)?.confidence ?? 0;
+          const confB = rankMap.get(currentCourses[j].id)?.confidence ?? 0;
           const score = confA + confB;
           if (score < bestScore) {
             bestScore = score;
-            bestPair = [courses[i], courses[j]];
+            bestPair = [currentCourses[i], currentCourses[j]];
           }
         }
       }
@@ -146,18 +161,18 @@ export default function ComparePage() {
     if (bestPair) return bestPair;
 
     // Phase E: Re-evaluation — all pairs compared, pick oldest
-    const oldest = [...comparisons].sort(
+    const oldest = [...currentComparisons].sort(
       (a, b) => new Date(a.updated_at).getTime() - new Date(b.updated_at).getTime()
     )[0];
     if (oldest) {
       return [
-        courses.find((c) => c.id === oldest.course_a_id)!,
-        courses.find((c) => c.id === oldest.course_b_id)!,
+        currentCourses.find((c) => c.id === oldest.course_a_id)!,
+        currentCourses.find((c) => c.id === oldest.course_b_id)!,
       ].filter(Boolean) as [Course, Course];
     }
 
     return null;
-  }, [courses, comparisons, sessionCount]);
+  }, []);
 
   // Select initial pair after data loads
   useEffect(() => {
@@ -254,7 +269,7 @@ export default function ComparePage() {
       return;
     }
 
-    // Animate out then select next pair
+    // Animate out then select next pair (refs ensure fresh data)
     setTimeout(() => {
       setChoosing(null);
       const nextPair = selectNextPair();
