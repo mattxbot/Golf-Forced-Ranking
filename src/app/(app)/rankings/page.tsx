@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import { LoadError } from "@/components/load-error";
+import { RankingsPageSkeleton } from "@/components/skeleton";
 import { computeRankings, overallConfidence } from "@/lib/ranking/bradley-terry";
 import type { Course, Comparison, RankingEntry } from "@/types/database";
 

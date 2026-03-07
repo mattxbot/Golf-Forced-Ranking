@@ -50,3 +50,20 @@ export const comparisonSchema = z.object({
 export const courseAddSchema = z.object({
   course_id: z.string().uuid(),
 });
+
+// ─── Course create ────────────────────────────────────────────────────
+
+export const courseCreateSchema = z.object({
+  name: z
+    .string()
+    .trim()
+    .min(2, "Course name must be at least 2 characters")
+    .max(120, "Course name too long"),
+  city: z.string().trim().max(100).optional().or(z.literal("")),
+  state_province: z.string().trim().max(100).optional().or(z.literal("")),
+  course_type: z
+    .enum(["links", "parkland", "desert", "mountain", "resort", "municipal", "private"])
+    .optional(),
+  holes: z.coerce.number().int().min(1).max(36).optional(),
+  par: z.coerce.number().int().min(27).max(80).optional(),
+});

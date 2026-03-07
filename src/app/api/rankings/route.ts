@@ -12,6 +12,7 @@
 
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { checkRateLimit } from "@/lib/rate-limit";
 import {
   computeRankingsDetailed,
   ALGORITHM_VERSION,
@@ -37,6 +38,18 @@ export async function GET() {
 
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  // Rate limit: 30 requests per minute per user
+  const limit = checkRateLimit(`rankings:${user.id}`, 30);
+  if (!limit.allowed) {
+    return NextResponse.json(
+      { error: "Too many requests" },
+      {
+        status: 429,
+        headers: { "Retry-After": String(Math.ceil(limit.retryAfterMs / 1000)) },
+      }
+    );
   }
 
   // Check cache first

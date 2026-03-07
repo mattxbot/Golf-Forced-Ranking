@@ -5,6 +5,12 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "Fairway — Rank Your Golf Courses",
   description: "Force-rank the golf courses you've played and discover your true favorites.",
+  manifest: "/manifest.json",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "black-translucent",
+    title: "Fairway",
+  },
 };
 
 export const viewport: Viewport = {
@@ -23,10 +29,11 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
+        <link rel="apple-touch-icon" href="/icon-192.svg" />
         {/* Inline script to prevent theme FOUC — runs before first paint */}
         <script
           dangerouslySetInnerHTML={{
-            __html: `(function(){try{var t=localStorage.getItem("theme");var d=t==="dark"||(t!=="light"&&matchMedia("(prefers-color-scheme:dark)").matches);document.documentElement.classList.toggle("dark",d)}catch(e){}})()`,
+            __html: `(function(){try{var t=localStorage.getItem("theme");var d=t==="dark"||(t!=="light"&&matchMedia("(prefers-color-scheme:dark)").matches);document.documentElement.classList.toggle("dark",d)}catch(e){}})();if("serviceWorker"in navigator)navigator.serviceWorker.register("/sw.js")`,
           }}
         />
       </head>
