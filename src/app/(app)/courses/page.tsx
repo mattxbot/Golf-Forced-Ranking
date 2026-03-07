@@ -8,6 +8,7 @@ import { trackEvent } from "@/lib/events";
 import { searchQuerySchema, courseCreateSchema } from "@/lib/validation";
 import { slugify } from "@/lib/utils";
 import { LoadError } from "@/components/load-error";
+import { CoursesPageSkeleton } from "@/components/skeleton";
 import type { Course } from "@/types/database";
 
 export default function CoursesPage() {
@@ -223,14 +224,7 @@ export default function CoursesPage() {
   }
 
   if (initLoading) {
-    return (
-      <div className="flex items-center justify-center pt-32">
-        <div className="flex flex-col items-center gap-3">
-          <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-          <p className="text-sm text-muted-foreground">Loading courses...</p>
-        </div>
-      </div>
-    );
+    return <CoursesPageSkeleton />;
   }
 
   return (

@@ -78,14 +78,7 @@ export default function RankingsPage() {
   }
 
   if (loading) {
-    return (
-      <div className="flex items-center justify-center pt-32">
-        <div className="flex flex-col items-center gap-3">
-          <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-          <p className="text-sm text-muted-foreground">Loading rankings...</p>
-        </div>
-      </div>
-    );
+    return <RankingsPageSkeleton />;
   }
 
   // Empty state: no courses added yet
@@ -216,7 +209,7 @@ export default function RankingsPage() {
       )}
 
       {/* Ranked list */}
-      <div className="space-y-2">
+      <div className="space-y-2 stagger-children">
         {rankings.map((entry) => {
           const course = courses.get(entry.course_id);
           if (!course) return null;

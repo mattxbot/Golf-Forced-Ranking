@@ -9,6 +9,7 @@ import { computeRankings, ALGORITHM_VERSION } from "@/lib/ranking/bradley-terry"
 import { trackEvent } from "@/lib/events";
 import { appendComparison, flushWal } from "@/lib/comparison-wal";
 import { LoadError } from "@/components/load-error";
+import { ComparePageSkeleton } from "@/components/skeleton";
 import { overallConfidence } from "@/lib/ranking/bradley-terry";
 import type { Course, Comparison, RankingEntry } from "@/types/database";
 
@@ -338,14 +339,7 @@ export default function ComparePage() {
   }
 
   if (loading) {
-    return (
-      <div className="flex items-center justify-center pt-32">
-        <div className="flex flex-col items-center gap-3">
-          <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-          <p className="text-sm text-muted-foreground">Loading courses...</p>
-        </div>
-      </div>
-    );
+    return <ComparePageSkeleton />;
   }
 
   if (courses.length < 2) {
@@ -459,7 +453,7 @@ export default function ComparePage() {
           <h2 className="mb-2 text-sm font-medium text-muted-foreground">
             Current top 3
           </h2>
-          <div className="space-y-2">
+          <div className="space-y-2 stagger-children">
             {postSessionRankings.slice(0, 3).map((entry) => {
               const course = courseMap.get(entry.course_id);
               if (!course) return null;

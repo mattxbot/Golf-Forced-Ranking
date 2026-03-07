@@ -401,7 +401,7 @@ export default function OnboardingPage() {
           Keep comparing to refine your list
         </p>
 
-        <div className="mt-8 space-y-2">
+        <div className="mt-8 space-y-2 stagger-children">
           {rankings.map((entry) => {
             const course = courseMap.get(entry.course_id);
             if (!course) return null;
