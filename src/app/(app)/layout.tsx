@@ -16,10 +16,12 @@ export default async function AppLayout({
   }
 
   return (
-    <div className="mx-auto min-h-dvh max-w-md pb-20">
-      <ErrorBoundary>
-        {children}
-      </ErrorBoundary>
+    <div className="min-h-dvh pb-20 md:pb-0 md:pl-20">
+      <div className="mx-auto max-w-lg px-0 md:px-6 md:py-4">
+        <ErrorBoundary>
+          {children}
+        </ErrorBoundary>
+      </div>
       <BottomNav />
     </div>
   );

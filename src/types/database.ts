@@ -201,6 +201,28 @@ export interface Database {
           updated_at?: string;
         };
       };
+      shared_rankings: {
+        Row: {
+          id: string;
+          user_id: string;
+          username: string;
+          rankings: SharedRankingCourse[];
+          confidence: number;
+          course_count: number;
+          comparison_count: number;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          user_id: string;
+          username: string;
+          rankings: SharedRankingCourse[];
+          confidence: number;
+          course_count: number;
+          comparison_count: number;
+        };
+        Update: never;
+      };
     };
   };
 }
@@ -211,6 +233,27 @@ export interface RankingEntry {
   rank: number;
   comparison_count: number;
   confidence: number;
+}
+
+/** A single course entry embedded in a shared ranking snapshot. */
+export interface SharedRankingCourse {
+  rank: number;
+  course_name: string;
+  course_location: string;
+  bt_score: number;
+  confidence: number;
+}
+
+/** Full shared ranking row from the database. */
+export interface SharedRanking {
+  id: string;
+  user_id: string;
+  username: string;
+  rankings: SharedRankingCourse[];
+  confidence: number;
+  course_count: number;
+  comparison_count: number;
+  created_at: string;
 }
 
 // Convenience type aliases

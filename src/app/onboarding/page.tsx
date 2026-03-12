@@ -204,7 +204,7 @@ export default function OnboardingPage() {
   // ---------------------------------------------------------------------------
   if (step === "add-courses") {
     return (
-      <div className="mx-auto flex min-h-dvh max-w-md flex-col px-4 pt-12">
+      <div className="mx-auto flex min-h-dvh max-w-md flex-col px-4 pt-12 md:pt-20">
         {/* Header */}
         <div className="mb-2 text-center">
           <span className="text-4xl">&#9971;</span>
@@ -322,7 +322,7 @@ export default function OnboardingPage() {
   // ---------------------------------------------------------------------------
   if (step === "quick-compare" && pair) {
     return (
-      <div className="mx-auto flex min-h-dvh max-w-md flex-col px-4 pt-12">
+      <div className="mx-auto flex min-h-dvh max-w-md flex-col px-4 pt-12 md:pt-20">
         <div className="mb-2 text-center">
           <span className="text-4xl">&#129351;</span>
         </div>
@@ -390,7 +390,7 @@ export default function OnboardingPage() {
     const courseMap = new Map(addedCourses.map((c) => [c.id, c]));
 
     return (
-      <div className="mx-auto flex min-h-dvh max-w-md flex-col px-4 pt-12">
+      <div className="mx-auto flex min-h-dvh max-w-md flex-col px-4 pt-12 md:pt-20">
         <div className="mb-2 text-center">
           <span className="text-4xl">&#127942;</span>
         </div>

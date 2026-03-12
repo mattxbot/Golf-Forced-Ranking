@@ -16,8 +16,8 @@ export function BottomNav() {
   const pathname = usePathname();
 
   return (
-    <nav className="fixed bottom-0 left-0 right-0 z-50 border-t bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80 safe-bottom">
-      <div className="mx-auto flex h-16 max-w-md items-center justify-around">
+    <nav className="fixed bottom-0 left-0 right-0 z-50 border-t bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80 safe-bottom md:fixed md:left-0 md:top-0 md:right-auto md:bottom-auto md:h-full md:w-20 md:border-r md:border-t-0">
+      <div className="mx-auto flex h-16 max-w-md items-center justify-around md:h-full md:max-w-none md:flex-col md:justify-start md:gap-2 md:pt-6">
         {tabs.map(({ href, label, icon: Icon }) => {
           const active = pathname.startsWith(href);
           return (

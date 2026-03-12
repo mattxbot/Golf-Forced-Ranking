@@ -5,10 +5,12 @@ import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import { LoadError } from "@/components/load-error";
+import { ProfilePageSkeleton } from "@/components/skeleton";
 import { useTheme } from "@/components/theme-provider";
 import { computeRankings, overallConfidence } from "@/lib/ranking/bradley-terry";
 import type { Course, Comparison } from "@/types/database";
-import { Sun, Moon, Monitor } from "lucide-react";
+import { Sun, Moon, Monitor, History } from "lucide-react";
+import Link from "next/link";
 
 export default function ProfilePage() {
   const [username, setUsername] = useState("");
@@ -84,14 +86,7 @@ export default function ProfilePage() {
   }
 
   if (loading) {
-    return (
-      <div className="flex items-center justify-center pt-32">
-        <div className="flex flex-col items-center gap-3">
-          <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-          <p className="text-sm text-muted-foreground">Loading...</p>
-        </div>
-      </div>
-    );
+    return <ProfilePageSkeleton />;
   }
 
   return (
@@ -120,6 +115,35 @@ export default function ProfilePage() {
             <p className="text-[11px] text-muted-foreground">Confidence</p>
           </div>
         </div>
+
+        {/* Comparison History link */}
+        <Link
+          href="/history"
+          className="flex items-center gap-3 rounded-lg border bg-card p-4 transition-colors hover:bg-accent"
+        >
+          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10">
+            <History className="h-4 w-4 text-primary" />
+          </div>
+          <div className="flex-1">
+            <p className="text-sm font-semibold">Comparison History</p>
+            <p className="text-xs text-muted-foreground">
+              View your past decisions
+            </p>
+          </div>
+          <svg
+            className="h-4 w-4 text-muted-foreground"
+            fill="none"
+            viewBox="0 0 24 24"
+            strokeWidth={2}
+            stroke="currentColor"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              d="M8.25 4.5l7.5 7.5-7.5 7.5"
+            />
+          </svg>
+        </Link>
 
         {/* Top ranked course */}
         {topCourse && (

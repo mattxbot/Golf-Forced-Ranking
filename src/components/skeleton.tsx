@@ -72,6 +72,102 @@ export function CoursesPageSkeleton() {
   );
 }
 
+/** Skeleton for the profile page */
+export function ProfilePageSkeleton() {
+  return (
+    <div className="px-4 pt-6">
+      <Skeleton className="mb-6 h-6 w-16" />
+      <div className="space-y-4">
+        {/* User info */}
+        <div className="rounded-lg border bg-card p-4">
+          <Skeleton className="mb-1.5 h-3 w-16" />
+          <Skeleton className="h-5 w-32" />
+        </div>
+        {/* Stats grid */}
+        <div className="grid grid-cols-3 gap-3">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <div key={i} className="rounded-lg border bg-card p-3 text-center">
+              <Skeleton className="mx-auto mb-1 h-7 w-10" />
+              <Skeleton className="mx-auto h-3 w-16" />
+            </div>
+          ))}
+        </div>
+        {/* Top course */}
+        <div className="rounded-lg border bg-card p-4">
+          <Skeleton className="mb-1.5 h-3 w-24" />
+          <Skeleton className="h-5 w-40" />
+          <Skeleton className="mt-1 h-3 w-28" />
+        </div>
+        {/* Theme toggle */}
+        <div className="rounded-lg border bg-card p-4">
+          <Skeleton className="mb-3 h-3 w-20" />
+          <div className="flex gap-2">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <Skeleton key={i} className="h-14 flex-1 rounded-lg" />
+            ))}
+          </div>
+        </div>
+        <Skeleton className="h-10 w-full rounded-md" />
+      </div>
+    </div>
+  );
+}
+
+/** Skeleton for a single history timeline entry */
+function HistoryEntrySkeleton() {
+  return (
+    <div className="relative flex gap-3 pl-5">
+      <div className="absolute left-[-3px] top-2 h-[7px] w-[7px] rounded-full bg-secondary" />
+      <div className="min-w-0 flex-1 rounded-lg border bg-card p-3">
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0 flex-1 space-y-1">
+            <Skeleton className="h-4 w-3/4" />
+            <Skeleton className="h-3 w-8" />
+            <Skeleton className="h-4 w-2/3" />
+          </div>
+          <div className="flex shrink-0 flex-col items-end gap-1">
+            <Skeleton className="h-4 w-10 rounded-full" />
+            <Skeleton className="h-3 w-12" />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Skeleton for the history page */
+export function HistoryPageSkeleton() {
+  return (
+    <div className="px-4 pt-6 pb-8">
+      {/* Header */}
+      <div className="mb-6 flex items-center gap-3">
+        <Skeleton className="h-8 w-8 rounded-lg" />
+        <div className="space-y-1.5">
+          <Skeleton className="h-6 w-44" />
+          <Skeleton className="h-3 w-28" />
+        </div>
+      </div>
+      {/* Date group */}
+      <div className="space-y-6">
+        <div>
+          <div className="mb-3 flex items-center gap-2">
+            <Skeleton className="h-3 w-16" />
+            <div className="h-px flex-1 bg-border" />
+          </div>
+          <div className="relative ml-3">
+            <div className="absolute left-0 top-2 bottom-2 w-px bg-border" />
+            <div className="space-y-3">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <HistoryEntrySkeleton key={i} />
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /** Skeleton for the compare page */
 export function ComparePageSkeleton() {
   return (
